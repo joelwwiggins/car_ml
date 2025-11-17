@@ -1,0 +1,73 @@
+version: '3.8'
+
+services:
+  obd2-collector:
+    build:
+      context: .
+      dockerfile: Dockerfile.data
+    container_name: obd2_collector
+    privileged: true  # Required for CAN bus access
+    devices:
+      - /dev/ttyUSB0:/dev/ttyUSB0  # For serial OBD2 adapters
+    networks:
+      - obd2_network
+    volumes:
+      - ./logs:/app/logs
+      - ./config:/app/config
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import requests; requests.get('http://localhost:8000')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    environment:
+      - PYTHONUNBUFFERED=1
+    # Limit memory usage for RPi Zero 2W
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+        reservations:
+          memory: 128M
+
+  obd2-monitor:
+    build:
+      context: .
+      dockerfile: Dockerfile.monitor
+    container_name: obd2_monitor
+    ports:
+      - "9090:9090"  # Prometheus
+      - "5000:5000"  # Web dashboard
+    networks:
+      - obd2_network
+    volumes:
+      - ./prometheus_data:/app/data
+      - ./config:/app/config
+    restart: unless-stopped
+    depends_on:
+      obd2-collector:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9090/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    environment:
+      - PYTHONUNBUFFERED=1
+    # Limit memory usage for RPi Zero 2W
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+        reservations:
+          memory: 128M
+
+networks:
+  obd2_network:
+    driver: bridge
+
+volumes:
+  prometheus_data:
+    driver: local

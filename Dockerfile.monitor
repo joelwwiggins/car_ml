@@ -1,0 +1,47 @@
+# Dockerfile for Prometheus + Grafana Monitoring Dashboard
+# Optimized for Raspberry Pi Zero 2W (ARMv7, 512MB RAM)
+
+FROM arm32v7/python:3.11-slim-bookworm
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    curl \
+    wget \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create directories
+WORKDIR /app
+RUN mkdir -p /app/data /app/config /etc/prometheus
+
+# Copy Prometheus configuration
+COPY prometheus.yml /etc/prometheus/prometheus.yml
+
+# Download and setup Prometheus (ARMv7)
+RUN wget -q https://github.com/prometheus/prometheus/releases/download/v2.45.0/prometheus-2.45.0.linux-armv7.tar.gz \
+    && tar -xzf prometheus-2.45.0.linux-armv7.tar.gz \
+    && mv prometheus-2.45.0.linux-armv7/prometheus /usr/local/bin/ \
+    && mv prometheus-2.45.0.linux-armv7/promtool /usr/local/bin/ \
+    && rm -rf prometheus-2.45.0.linux-armv7*
+
+# Install Python dependencies for simple web dashboard
+RUN pip install --no-cache-dir \
+    flask \
+    prometheus_client \
+    gunicorn
+
+# Copy dashboard application
+COPY dashboard.py .
+
+# Create non-root user
+RUN useradd --create-home --shell /bin/bash monitor && chown -R monitor:monitor /app
+USER monitor
+
+# Expose ports
+EXPOSE 9090 3000 5000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD curl -f http://localhost:9090/-/healthy || exit 1
+
+# Start both Prometheus and dashboard
+CMD ["sh", "-c", "prometheus --config.file=/etc/prometheus/prometheus.yml --storage.tsdb.path=/app/data --web.listen-address=:9090 & python3 dashboard.py"]
