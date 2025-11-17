@@ -29,8 +29,8 @@ CAN_INTERFACE = 'can0'
 CAN_BITRATE = 500000
 PROMETHEUS_PORT = 8000
 DATA_BUFFER_SIZE = 100
-LOG_FILE = '/app/logs/obd2_collector.log'
-CONFIG_FILE = '/app/config/obd2_config.json'
+LOG_FILE = os.path.join(os.path.dirname(__file__), 'logs', 'obd2_collector.log')
+CONFIG_FILE = os.path.join(os.path.dirname(__file__), 'config', 'obd2_config.json')
 
 # Prometheus metrics
 obd2_temperature = Gauge('obd2_engine_temperature', 'Engine coolant temperature (°C)')
@@ -50,8 +50,9 @@ class OBD2Collector:
         self.scaler = StandardScaler()
         self.is_training = True
         self.training_samples = 0
-        self.min_training_samples = 50
+        self.min_training_samples = 100
         self.shutdown_event = threading.Event()
+        self.mock_mode = False  # Add mock mode flag
 
         # OBD2 PID mappings (simplified)
         self.pid_mappings = {
@@ -114,11 +115,32 @@ class OBD2Collector:
             self.logger.info("Serial OBD2 adapter initialized")
             return True
         except Exception as e:
-            self.logger.error(f"Failed to initialize any OBD2 interface: {e}")
-            return False
+            self.logger.warning(f"Serial interface failed: {e}, running in MOCK mode")
+            self.mock_mode = True
+            return True
 
     def send_obd2_request(self, pid: int) -> Optional[bytes]:
         """Send OBD2 PID request and return response."""
+        if self.mock_mode:
+            # Generate mock OBD2 response data
+            import random
+            if pid == 0x05:  # Engine coolant temperature (70-110°C)
+                temp = random.randint(70, 110)
+                return bytes([0x03, 0x41, 0x05, temp + 40, 0x00, 0x00, 0x00])
+            elif pid == 0x0C:  # Engine RPM (800-4000)
+                rpm = random.randint(800, 4000)
+                rpm_a = rpm // 256
+                rpm_b = rpm % 256
+                return bytes([0x04, 0x41, 0x0C, rpm_a, rpm_b, 0x00, 0x00, 0x00])
+            elif pid == 0x0D:  # Vehicle speed (0-120 km/h)
+                speed = random.randint(0, 120)
+                return bytes([0x03, 0x41, 0x0D, speed, 0x00, 0x00, 0x00, 0x00])
+            elif pid == 0x2F:  # Fuel level (10-100%)
+                fuel = random.randint(10, 100)
+                fuel_scaled = int((fuel * 255) / 100)
+                return bytes([0x03, 0x41, 0x2F, fuel_scaled, 0x00, 0x00, 0x00, 0x00])
+            return None
+
         if self.bus:
             # CAN bus implementation
             try:
@@ -159,14 +181,17 @@ class OBD2Collector:
                 return None
 
             # Skip header bytes and get actual data
-            value_byte = data[2]
+            # For single byte responses: data[3] contains the value
+            # For multi-byte responses: data[3] and data[4] contain the values
+            if pid in [0x05, 0x0D, 0x2F]:  # Single byte PIDs
+                value_byte = data[3]
+            elif pid == 0x0C:  # Two byte PID (RPM)
+                if len(data) >= 5:
+                    return ((data[3] * 256) + data[4]) / 4  # Formula: ((A*256)+B)/4
 
             # Convert based on PID
             if pid == 0x05:  # Engine coolant temperature
                 return value_byte - 40  # Formula: A - 40
-            elif pid == 0x0C:  # Engine RPM
-                if len(data) >= 4:
-                    return ((data[2] * 256) + data[3]) / 4  # Formula: ((A*256)+B)/4
             elif pid == 0x0D:  # Vehicle speed
                 return value_byte  # Formula: A (km/h)
             elif pid == 0x2F:  # Fuel level
@@ -219,8 +244,8 @@ class OBD2Collector:
             obd2_voltage.set(voltage)
             return voltage
 
-        except ImportError:
-            self.logger.warning("ADS1015 libraries not available, using mock voltage")
+        except (ImportError, AttributeError):
+            self.logger.warning("ADS1015 libraries not available or board pins not configured, using mock voltage")
             # Fallback to mock value for development/testing
             voltage = 12.5
             obd2_voltage.set(voltage)
@@ -286,7 +311,7 @@ class OBD2Collector:
                 'scaler_scale': self.scaler.scale_.tolist() if hasattr(self.scaler, 'scale_') else None,
             }
 
-            with open('/app/checkpoint.json', 'w') as f:
+            with open(os.path.join(os.path.dirname(__file__), 'checkpoint.json'), 'w') as f:
                 json.dump(checkpoint, f)
 
         except Exception as e:
@@ -295,8 +320,8 @@ class OBD2Collector:
     def load_checkpoint(self):
         """Load previous model state."""
         try:
-            if os.path.exists('/app/checkpoint.json'):
-                with open('/app/checkpoint.json', 'r') as f:
+            if os.path.exists(os.path.join(os.path.dirname(__file__), 'checkpoint.json')):
+                with open(os.path.join(os.path.dirname(__file__), 'checkpoint.json'), 'r') as f:
                     checkpoint = json.load(f)
 
                 self.data_buffer.extend(checkpoint.get('data_buffer', []))
@@ -306,6 +331,17 @@ class OBD2Collector:
                 if checkpoint.get('scaler_mean') and checkpoint.get('scaler_scale'):
                     self.scaler.mean_ = np.array(checkpoint['scaler_mean'])
                     self.scaler.scale_ = np.array(checkpoint['scaler_scale'])
+
+                # If we have enough data, retrain the model
+                if len(self.data_buffer) >= self.min_training_samples:
+                    X = np.array(list(self.data_buffer))
+                    X_scaled = self.scaler.transform(X)
+                    self.gmm_model = GaussianMixture(n_components=2, random_state=42)
+                    self.gmm_model.fit(X_scaled)
+                    self.is_training = False
+                    self.logger.info("GMM model retrained from checkpoint data")
+                else:
+                    self.is_training = True
 
                 self.logger.info("Checkpoint loaded successfully")
 
@@ -347,7 +383,7 @@ class OBD2Collector:
                     voltage = data_point.get('battery_voltage', 12.0)
                     self.check_low_voltage_shutdown(voltage)
 
-                    self.logger.debug(f"Data point collected: {data_point}")
+                    self.logger.info(f"Data point collected: {data_point}")
 
                 # Periodic checkpoint save
                 if int(time.time()) % 300 == 0:  # Every 5 minutes
