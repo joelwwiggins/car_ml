@@ -103,33 +103,18 @@ EOF'
 sudo systemctl daemon-reload
 sudo systemctl enable obd2-monitor.service
 
-# Setup watchdog for low voltage shutdown
-echo "Setting up low voltage monitoring..."
-sudo sh -c 'cat > /usr/local/bin/check_voltage.sh << '"'"'EOF'"'"'
-#!/bin/bash
-# Check battery voltage and shutdown if too low
-# This requires ADC hardware connected to battery
+# Setup ADC for voltage monitoring (ADS1015 via I2C)
+echo "Setting up ADS1015 ADC for voltage monitoring..."
+sudo pip3 install adafruit-circuitpython-ads1x15 adafruit-blinka
 
-VOLTAGE=$(python3 -c "
-import time
-# Mock voltage check - replace with actual ADC reading
-voltage = 12.5
-print(voltage)
-")
+# Enable I2C (already done above, but ensure)
+sudo raspi-config nonint do_i2c 0
 
-THRESHOLD=11.5
-
-if (( $(echo "$VOLTAGE < $THRESHOLD" | bc -l) )); then
-    echo "$(date): Low voltage detected: ${VOLTAGE}V, shutting down" >> /var/log/obd2_voltage.log
-    /usr/bin/docker-compose -f /home/pi/obd2_monitor/docker-compose.yml down
-    sudo shutdown -h now
-fi
-EOF'
-
-sudo chmod +x /usr/local/bin/check_voltage.sh
-
-# Add to cron for periodic checking
-echo "*/5 * * * * /usr/local/bin/check_voltage.sh" | sudo crontab -
+# Setup voltage monitor systemd service
+echo "Setting up voltage monitor service..."
+sudo cp voltage-monitor.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable voltage-monitor.service
 
 # Setup firewall (optional)
 echo "Setting up firewall..."

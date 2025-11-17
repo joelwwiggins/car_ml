@@ -9,11 +9,13 @@ services:
     privileged: true  # Required for CAN bus access
     devices:
       - /dev/ttyUSB0:/dev/ttyUSB0  # For serial OBD2 adapters
+      - /dev/i2c-1:/dev/i2c-1      # For ADC voltage monitoring
     networks:
       - obd2_network
     volumes:
       - ./logs:/app/logs
       - ./config:/app/config
+      - ./checkpoint.json:/app/checkpoint.json
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python3", "-c", "import requests; requests.get('http://localhost:8000')"]
@@ -23,13 +25,15 @@ services:
       start_period: 40s
     environment:
       - PYTHONUNBUFFERED=1
-    # Limit memory usage for RPi Zero 2W
+    # Memory limits for RPi Zero 2W (512MB total)
     deploy:
       resources:
         limits:
-          memory: 256M
+          memory: 200M
+          cpus: '0.5'
         reservations:
-          memory: 128M
+          memory: 100M
+          cpus: '0.2'
 
   obd2-monitor:
     build:
@@ -56,13 +60,15 @@ services:
       start_period: 30s
     environment:
       - PYTHONUNBUFFERED=1
-    # Limit memory usage for RPi Zero 2W
+    # Memory limits for RPi Zero 2W (512MB total)
     deploy:
       resources:
         limits:
-          memory: 256M
+          memory: 150M
+          cpus: '0.3'
         reservations:
-          memory: 128M
+          memory: 75M
+          cpus: '0.1'
 
 networks:
   obd2_network:

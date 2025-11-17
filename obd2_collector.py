@@ -198,12 +198,39 @@ class OBD2Collector:
         return data_point
 
     def check_battery_voltage(self) -> float:
-        """Check battery voltage for low voltage shutdown."""
-        # This would need ADC hardware connected to battery
-        # For now, return a mock value
-        voltage = 12.5  # Mock voltage
-        obd2_voltage.set(voltage)
-        return voltage
+        """Check battery voltage for low voltage shutdown using ADC."""
+        try:
+            # Try to read from ADS1015 ADC via I2C
+            import board
+            import busio
+            import adafruit_ads1x15.ads1015 as ADS
+            from adafruit_ads1x15.analog_in import AnalogIn
+
+            # Initialize I2C bus and ADC
+            i2c = busio.I2C(board.SCL, board.SDA)
+            ads = ADS.ADS1015(i2c)
+            chan = AnalogIn(ads, ADS.P0)  # A0 pin
+
+            # Voltage divider: assuming 10k/10k divider (half voltage)
+            # ADC reading * 2 * reference voltage / max ADC value
+            voltage = chan.voltage * 2 * 3.3 / 2047.0
+
+            self.logger.debug(f"ADC voltage reading: {chan.voltage:.3f}V, calculated battery: {voltage:.1f}V")
+            obd2_voltage.set(voltage)
+            return voltage
+
+        except ImportError:
+            self.logger.warning("ADS1015 libraries not available, using mock voltage")
+            # Fallback to mock value for development/testing
+            voltage = 12.5
+            obd2_voltage.set(voltage)
+            return voltage
+        except Exception as e:
+            self.logger.error(f"Failed to read battery voltage: {e}")
+            # Return safe default
+            voltage = 12.0
+            obd2_voltage.set(voltage)
+            return voltage
 
     def update_gmm_model(self, data_point: Dict):
         """Update GMM model with new data point."""

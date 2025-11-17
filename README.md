@@ -37,9 +37,28 @@ Real-time OBD2 data collection and monitoring system optimized for Raspberry Pi 
 ## Hardware Requirements
 
 - **Raspberry Pi Zero 2W** (512MB RAM)
-- **OBD2 Interface**: CAN HAT (MCP2515) or Serial adapter
-- **Power Supply**: Stable 5V/2A with battery monitoring
-- **Storage**: MicroSD card (16GB+ recommended)
+- **CAN HAT**: PiCAN or Waveshare CAN HAT (MCP2515-based)
+- **ADC Module**: ADS1015 for battery voltage monitoring
+- **OBD2 Interface**: Standard OBD2-to-DB9 cable
+- **Power Supply**: Stable 5V/2A with battery monitoring circuit
+
+### Hardware Wiring
+
+#### CAN HAT Connection
+- Connect CAN HAT to RPi GPIO pins
+- CAN H/L lines to OBD2 cable
+- 120Ω termination resistor (if not on HAT)
+
+#### Voltage Monitoring Circuit
+```
+Battery +12V → Voltage Divider (10kΩ + 10kΩ) → ADS1015 A0
+RPi I2C: SDA (GPIO 2), SCL (GPIO 3), GND, 3.3V
+```
+
+### Voltage Divider Calculation
+- R1 = R2 = 10kΩ (half voltage)
+- ADC reads 0-3.3V representing 0-6.6V battery
+- Scale factor: `adc_voltage * 2`
 
 ## Quick Start
 
@@ -179,16 +198,41 @@ ip link show can0
 
 ## Low Voltage Protection
 
-### Automatic Shutdown
+### Automatic Shutdown System
 
-- Monitors battery voltage every 5 minutes
-- Threshold: 11.5V (configurable)
-- Graceful container shutdown before system halt
+The system includes dual voltage monitoring:
 
-### Hardware Requirements
+1. **In-Container Monitoring**: OBD2 collector checks voltage every second
+2. **System-Level Monitoring**: Independent `voltage_monitor.py` service
 
-- ADC connected to battery voltage divider
-- Configurable threshold in `obd2_config.json`
+### Shutdown Logic
+
+- **Threshold**: 11.0V (configurable)
+- **Grace Period**: 60 seconds of sustained low voltage
+- **Action**: Graceful container shutdown → System halt
+
+### Hardware Setup
+
+```bash
+# Enable I2C for ADS1015
+sudo raspi-config nonint do_i2c 0
+
+# Install ADC libraries
+pip3 install adafruit-circuitpython-ads1x15 adafruit-blinka
+```
+
+### Service Management
+
+```bash
+# Start voltage monitor
+sudo systemctl start voltage-monitor
+
+# Check status
+sudo systemctl status voltage-monitor
+
+# View logs
+journalctl -u voltage-monitor
+```
 
 ## Troubleshooting
 
