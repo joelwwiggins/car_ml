@@ -134,3 +134,12 @@ dmypy.json
 
 # Docker
 Dockerfile
+
+# Application runtime files
+logs/
+*.log
+checkpoint.json
+prometheus_data/
+
+# CSV log files
+*.csv

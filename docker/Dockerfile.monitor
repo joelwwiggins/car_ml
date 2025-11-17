@@ -1,0 +1,74 @@
+# Multi-stage Dockerfile for Prometheus + Web Dashboard
+# Optimized for Raspberry Pi Zero 2W (ARM64, 512MB RAM)
+
+# Stage 1: Builder stage for downloading and setting up Prometheus
+FROM --platform=linux/arm64 arm64v8/debian:bookworm-slim AS prometheus-builder
+
+# Install wget and ca-certificates for downloading
+RUN apt-get update && apt-get install -y \
+    wget \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Download and extract Prometheus (ARM64)
+RUN wget -q https://github.com/prometheus/prometheus/releases/download/v2.45.0/prometheus-2.45.0.linux-arm64.tar.gz \
+    && tar -xzf prometheus-2.45.0.linux-arm64.tar.gz \
+    && mv prometheus-2.45.0.linux-arm64 /opt/prometheus \
+    && rm prometheus-2.45.0.linux-arm64.tar.gz
+
+# Stage 2: Python builder stage
+FROM --platform=linux/arm64 arm64v8/python:3.11-slim-bookworm AS python-builder
+
+# Create virtual environment
+RUN python3 -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Install Python dependencies
+RUN pip install --no-cache-dir \
+    flask \
+    prometheus_client \
+    gunicorn \
+    requests
+
+# Stage 3: Runtime stage (minimal final image)
+FROM --platform=linux/arm64 arm64v8/debian:bookworm-slim
+
+# Install only essential runtime dependencies
+RUN apt-get update && apt-get install -y \
+    curl \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
+
+# Copy Prometheus from builder stage
+COPY --from=prometheus-builder /opt/prometheus/prometheus /usr/local/bin/prometheus
+COPY --from=prometheus-builder /opt/prometheus/promtool /usr/local/bin/promtool
+
+# Copy Python virtual environment
+COPY --from=python-builder /opt/venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Create directories
+WORKDIR /app
+RUN mkdir -p /app/data /app/config /etc/prometheus
+
+# Copy Prometheus configuration
+COPY ../config/prometheus.yml /etc/prometheus/prometheus.yml
+
+# Copy dashboard application
+COPY ../src/dashboard.py .
+
+# Create non-root user
+RUN useradd --create-home --shell /bin/bash monitor && \
+    chown -R monitor:monitor /app /etc/prometheus
+USER monitor
+
+# Expose ports
+EXPOSE 9090 5000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD curl -f http://localhost:9090/-/healthy || exit 1
+
+# Start both Prometheus and dashboard
+CMD ["sh", "-c", "prometheus --config.file=/etc/prometheus/prometheus.yml --storage.tsdb.path=/app/data --web.listen-address=:9090 --web.enable-lifecycle & python3 dashboard.py"]

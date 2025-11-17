@@ -1,0 +1,62 @@
+# Multi-stage Dockerfile for OBD2 Data Collector with GMM Anomaly Detection
+# Optimized for Raspberry Pi Zero 2W (ARM64, 512MB RAM)
+
+# Stage 1: Builder stage for compiling dependencies
+FROM --platform=linux/arm64 arm64v8/python:3.11-slim-bookworm AS builder
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    python3-dev \
+    libatlas-base-dev \
+    pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create virtual environment
+RUN python3 -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Copy requirements and install Python dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Stage 2: Runtime stage (minimal final image)
+FROM --platform=linux/arm64 arm64v8/python:3.11-slim-bookworm
+
+# Install only runtime system dependencies
+RUN apt-get update && apt-get install -y \
+    can-utils \
+    iproute2 \
+    net-tools \
+    libatlas-base-dev \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
+
+# Copy virtual environment from builder stage
+COPY --from=builder /opt/venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Create app directory
+WORKDIR /app
+
+# Create directories for logs and config
+RUN mkdir -p /app/logs /app/config
+
+# Copy application code
+COPY src/obd2_collector.py .
+COPY config/obd2_config.json /app/config/
+
+# Create non-root user for security
+RUN useradd --create-home --shell /bin/bash app && \
+    chown -R app:app /app
+USER app
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD python3 -c "import requests; requests.get('http://localhost:8000')" || exit 1
+
+# Expose Prometheus metrics port
+EXPOSE 8000
+
+# Default command
+CMD ["python3", "obd2_collector.py"]
