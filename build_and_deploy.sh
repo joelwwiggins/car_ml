@@ -9,21 +9,21 @@ echo "🚗 Building OBD2 Monitor for Raspberry Pi Zero 2W..."
 # Enable Docker buildx for cross-compilation
 docker buildx create --use --name cross-builder 2>/dev/null || docker buildx use cross-builder
 
-# Build data collector container (ARMv7)
+# Build data collector container (ARM64)
 echo "Building data collector container..."
 docker buildx build \
-    --platform linux/arm/v7 \
+    --platform linux/arm64 \
     --file Dockerfile.data \
-    --tag obd2-collector:armv7 \
+    --tag obd2-collector:arm64 \
     --load \
     .
 
-# Build monitoring container (ARMv7)
+# Build monitoring container (ARM64)
 echo "Building monitoring container..."
 docker buildx build \
-    --platform linux/arm/v7 \
+    --platform linux/arm64 \
     --file Dockerfile.monitor \
-    --tag obd2-monitor:armv7 \
+    --tag obd2-monitor:arm64 \
     --load \
     .
 
@@ -32,15 +32,15 @@ echo ""
 echo "📦 Deployment Options:"
 echo ""
 echo "Option 1 - Save to tar files for transfer:"
-echo "docker save obd2-collector:armv7 > obd2-collector-armv7.tar"
-echo "docker save obd2-monitor:armv7 > obd2-monitor-armv7.tar"
+echo "docker save obd2-collector:arm64 > obd2-collector-arm64.tar"
+echo "docker save obd2-monitor:arm64 > obd2-monitor-arm64.tar"
 echo "scp *.tar pi@<rpi-ip>:/home/pi/"
 echo ""
 echo "Option 2 - Push to registry (requires registry access):"
-echo "# docker tag obd2-collector:armv7 your-registry/obd2-collector:armv7"
-echo "# docker tag obd2-monitor:armv7 your-registry/obd2-monitor:armv7"
-echo "# docker push your-registry/obd2-collector:armv7"
-echo "# docker push your-registry/obd2-monitor:armv7"
+echo "# docker tag obd2-collector:arm64 your-registry/obd2-collector:arm64"
+echo "# docker tag obd2-monitor:arm64 your-registry/obd2-monitor:arm64"
+echo "# docker push your-registry/obd2-collector:arm64"
+echo "# docker push your-registry/obd2-monitor:arm64"
 echo ""
 echo "Option 3 - Direct deploy (if RPi accessible via SSH):"
 echo "# scp -r . pi@<rpi-ip>:/home/pi/obd2_monitor"

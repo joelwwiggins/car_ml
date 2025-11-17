@@ -89,7 +89,17 @@ sudo ./setup_rpi.sh
 sudo reboot
 
 # After reboot, start monitoring
-sudo systemctl start obd2-monitor
+sudo systemctl start obd2-monitor voltage-monitor
+```
+
+### 3. Desktop Build Process
+
+```bash
+# Setup Docker Buildx for ARM64 cross-compilation
+./setup_buildx.sh
+
+# Build optimized multi-stage images
+./build_and_deploy.sh
 ```
 
 ### 3. Access Dashboard
@@ -119,24 +129,50 @@ Configured for local metrics collection with 1-second intervals.
 
 ## Docker Deployment
 
-### Build for RPi (ARMv7)
+### Multi-Stage Build Optimization
+
+The Dockerfiles use multi-stage builds to minimize final image size and optimize for ARM64:
+
+**Data Collector (`Dockerfile.data`):**
+- **Builder Stage**: Compiles Python dependencies with build tools
+- **Runtime Stage**: Minimal Debian with only essential libraries
+- **Result**: ~150MB image (down from ~300MB single-stage)
+
+**Monitor (`Dockerfile.monitor`):**
+- **Prometheus Builder**: Downloads and extracts ARM64 Prometheus
+- **Python Builder**: Creates virtual environment with dependencies
+- **Runtime Stage**: Combines both with minimal base image
+- **Result**: ~200MB image with full monitoring stack
+
+### Build for RPi (ARM64)
 
 ```bash
+# Setup Buildx for cross-compilation
+./setup_buildx.sh
+
 # Build data collector
-docker build -f Dockerfile.data -t obd2-collector:armv7 .
+docker buildx build \
+    --platform linux/arm64 \
+    -f Dockerfile.data \
+    -t obd2-collector:arm64 \
+    --load .
 
 # Build monitoring dashboard
-docker build -f Dockerfile.monitor -t obd2-monitor:armv7 .
+docker buildx build \
+    --platform linux/arm64 \
+    -f Dockerfile.monitor \
+    -t obd2-monitor:arm64 \
+    --load .
 
 # Deploy with docker-compose
 docker-compose up -d
 ```
 
-### Memory Optimization
+### Platform Architecture
 
-- **Data Collector**: 128-256MB limit
-- **Monitor/Dashboard**: 128-256MB limit
-- **Total System**: <400MB RAM usage
+- **Raspberry Pi Zero 2W**: ARM64 (aarch64)
+- **Base Images**: `arm64v8/python:3.11-slim-bookworm`
+- **Prometheus**: `prometheus-2.45.0.linux-arm64.tar.gz`
 
 ## CAN Bus Setup
 
