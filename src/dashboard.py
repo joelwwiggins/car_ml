@@ -4,13 +4,33 @@ Simple Web Dashboard for OBD2 Monitoring
 Displays Prometheus metrics in a web interface optimized for mobile/RPi
 """
 
-from flask import Flask, render_template_string, jsonify
+from flask import Flask, render_template_string, jsonify, request
 import requests
 import time
 import threading
 import logging
+from functools import wraps
 
 app = Flask(__name__)
+
+# Simple authentication
+USERNAME = 'admin'
+PASSWORD = 'password'  # Change in production
+
+def check_auth(username, password):
+    return username == USERNAME and password == PASSWORD
+
+def authenticate():
+    return jsonify({'error': 'Authentication required'}), 401
+
+def requires_auth(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        auth = request.authorization
+        if not auth or not check_auth(auth.username, auth.password):
+            return authenticate()
+        return f(*args, **kwargs)
+    return decorated
 
 # Prometheus endpoint
 METRICS_URL = "http://localhost:8000/metrics"
@@ -259,10 +279,12 @@ def get_metrics():
     return metrics
 
 @app.route('/')
+@requires_auth
 def dashboard():
     return render_template_string(HTML_TEMPLATE)
 
 @app.route('/api/metrics')
+@requires_auth
 def api_metrics():
     return jsonify(get_metrics())
 

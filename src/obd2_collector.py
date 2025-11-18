@@ -23,15 +23,16 @@ from prometheus_client import start_http_server, Gauge, Counter, Histogram
 import numpy as np
 import tensorflow as tf
 from tensorflow.keras import layers, models
+from tensorflow import lite as tflite
 from sklearn.preprocessing import StandardScaler
 
 # Configuration
 CAN_INTERFACE = 'can0'
 CAN_BITRATE = 500000
 PROMETHEUS_PORT = 8000
-DATA_BUFFER_SIZE = 1000  # Store more data for sequences
-SEQUENCE_LENGTH = 64    # Length of time sequences for CNN
-FEATURE_DIM = 4         # Number of sensor features
+DATA_BUFFER_SIZE = 500  # Reduced for memory optimization
+SEQUENCE_LENGTH = 32    # Reduced sequence length for memory efficiency
+FEATURE_DIM = 7         # Number of sensor features
 LOG_FILE = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'logs', 'obd2_collector.log')
 CONFIG_FILE = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config', 'obd2_config.json')
 
@@ -40,6 +41,9 @@ obd2_temperature = Gauge('obd2_engine_temperature', 'Engine coolant temperature 
 obd2_rpm = Gauge('obd2_engine_rpm', 'Engine RPM')
 obd2_speed = Gauge('obd2_vehicle_speed', 'Vehicle speed (km/h)')
 obd2_fuel_level = Gauge('obd2_fuel_level', 'Fuel level (%)')
+obd2_maf = Gauge('obd2_mass_air_flow', 'Mass air flow (g/s)')
+obd2_intake_temp = Gauge('obd2_intake_air_temp', 'Intake air temperature (°C)')
+obd2_throttle_pos = Gauge('obd2_throttle_position', 'Throttle position (%)')
 obd2_voltage = Gauge('obd2_battery_voltage', 'Battery voltage (V)')
 obd2_anomaly_score = Gauge('obd2_anomaly_score', 'CNN autoencoder anomaly detection score (0-1)')
 obd2_error_count = Counter('obd2_errors_total', 'Total OBD2 communication errors')
@@ -50,6 +54,7 @@ class OBD2Collector:
         self.logger = self._setup_logging()
         self.data_buffer = deque(maxlen=DATA_BUFFER_SIZE)
         self.cnn_model = None
+        self.tflite_interpreter = None
         self.scaler = StandardScaler()
         self.is_training = True
         self.training_samples = 0
@@ -63,6 +68,9 @@ class OBD2Collector:
             0x0C: ('engine_rpm', obd2_rpm),
             0x0D: ('vehicle_speed', obd2_speed),
             0x2F: ('fuel_level', obd2_fuel_level),
+            0x10: ('mass_air_flow', obd2_maf),
+            0x0F: ('intake_air_temp', obd2_intake_temp),
+            0x11: ('throttle_position', obd2_throttle_pos),
         }
 
         # Low voltage shutdown threshold
@@ -80,15 +88,19 @@ class OBD2Collector:
 
         # Encoder
         encoder_input = layers.Input(shape=input_shape)
-        x = layers.Conv1D(16, 7, activation='relu', padding='same')(encoder_input)
+        x = layers.Conv1D(32, 7, activation='relu', padding='same')(encoder_input)
         x = layers.MaxPooling1D(2)(x)
-        x = layers.Conv1D(8, 5, activation='relu', padding='same')(x)
+        x = layers.Conv1D(16, 5, activation='relu', padding='same')(x)
+        x = layers.MaxPooling1D(2)(x)
+        x = layers.Conv1D(8, 3, activation='relu', padding='same')(x)
         encoded = layers.MaxPooling1D(2)(x)
 
         # Decoder
-        x = layers.Conv1D(8, 5, activation='relu', padding='same')(encoded)
+        x = layers.Conv1D(8, 3, activation='relu', padding='same')(encoded)
         x = layers.UpSampling1D(2)(x)
-        x = layers.Conv1D(16, 7, activation='relu', padding='same')(x)
+        x = layers.Conv1D(16, 5, activation='relu', padding='same')(x)
+        x = layers.UpSampling1D(2)(x)
+        x = layers.Conv1D(32, 7, activation='relu', padding='same')(x)
         x = layers.UpSampling1D(2)(x)
         decoded = layers.Conv1D(FEATURE_DIM, 3, activation='linear', padding='same')(x)
 
@@ -96,6 +108,11 @@ class OBD2Collector:
         autoencoder.compile(optimizer='adam', loss='mse')
 
         return autoencoder
+
+    def representative_dataset_gen(self):
+        """Generate representative dataset for TFLite quantization."""
+        for _ in range(100):
+            yield [np.random.rand(1, SEQUENCE_LENGTH, FEATURE_DIM).astype(np.float32)]
 
     def _setup_logging(self) -> logging.Logger:
         """Setup comprehensive logging for debugging and monitoring."""
@@ -165,6 +182,18 @@ class OBD2Collector:
                 fuel = random.randint(10, 100)
                 fuel_scaled = int((fuel * 255) / 100)
                 return bytes([0x03, 0x41, 0x2F, fuel_scaled, 0x00, 0x00, 0x00, 0x00])
+            elif pid == 0x10:  # Mass air flow (5-50 g/s)
+                maf = random.randint(500, 5000)  # Scaled by 100
+                maf_a = maf // 256
+                maf_b = maf % 256
+                return bytes([0x04, 0x41, 0x10, maf_a, maf_b, 0x00, 0x00, 0x00])
+            elif pid == 0x0F:  # Intake air temp (20-40°C)
+                temp = random.randint(20, 40)
+                return bytes([0x03, 0x41, 0x0F, temp + 40, 0x00, 0x00, 0x00, 0x00])
+            elif pid == 0x11:  # Throttle position (0-100%)
+                throttle = random.randint(0, 100)
+                throttle_scaled = int((throttle * 255) / 100)
+                return bytes([0x03, 0x41, 0x11, throttle_scaled, 0x00, 0x00, 0x00, 0x00])
             return None
 
         if self.bus:
@@ -207,20 +236,28 @@ class OBD2Collector:
                 return None
 
             # Skip header bytes and get actual data
-            # For single byte responses: data[3] contains the value
-            # For multi-byte responses: data[3] and data[4] contain the values
-            if pid in [0x05, 0x0D, 0x2F]:  # Single byte PIDs
+            if pid in [0x05, 0x0D, 0x2F, 0x0F, 0x11]:  # Single byte PIDs
                 value_byte = data[3]
-            elif pid == 0x0C:  # Two byte PID (RPM)
+            elif pid in [0x0C, 0x10]:  # Two byte PIDs
                 if len(data) >= 5:
-                    return ((data[3] * 256) + data[4]) / 4  # Formula: ((A*256)+B)/4
+                    value_byte = (data[3] * 256) + data[4]
+                else:
+                    return None
 
             # Convert based on PID
             if pid == 0x05:  # Engine coolant temperature
                 return value_byte - 40  # Formula: A - 40
+            elif pid == 0x0C:  # Engine RPM
+                return value_byte / 4  # Formula: ((A*256)+B)/4
             elif pid == 0x0D:  # Vehicle speed
                 return value_byte  # Formula: A (km/h)
             elif pid == 0x2F:  # Fuel level
+                return (value_byte * 100) / 255  # Formula: (A*100)/255 (%)
+            elif pid == 0x10:  # Mass air flow
+                return value_byte / 100  # Formula: ((A*256)+B)/100
+            elif pid == 0x0F:  # Intake air temperature
+                return value_byte - 40  # Formula: A - 40
+            elif pid == 0x11:  # Throttle position
                 return (value_byte * 100) / 255  # Formula: (A*100)/255 (%)
 
         except Exception as e:
@@ -316,10 +353,25 @@ class OBD2Collector:
                 # Create and train CNN autoencoder
                 self.cnn_model = self.create_cnn_autoencoder()
                 self.cnn_model.fit(X_sequences, X_sequences,
-                                 epochs=50, batch_size=32, verbose=0)
+                                 epochs=50, batch_size=16, verbose=0)
+
+                # Convert to TFLite for efficient inference
+                converter = tflite.TFLiteConverter.from_keras_model(self.cnn_model)
+                converter.optimizations = [tf.lite.Optimize.DEFAULT]
+                converter.representative_dataset = self.representative_dataset_gen
+                tflite_model = converter.convert()
+
+                self.tflite_model = tflite_model
+                self.tflite_interpreter = tflite.Interpreter(model_content=tflite_model)
+                self.tflite_interpreter.allocate_tensors()
+
+                # Save TFLite model
+                tflite_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'cnn_model.tflite')
+                with open(tflite_path, 'wb') as f:
+                    f.write(tflite_model)
 
                 self.is_training = False
-                self.logger.info("CNN autoencoder trained with initial data")
+                self.logger.info("CNN autoencoder trained and converted to TFLite")
 
             else:
                 # Update existing model (retrain periodically)
@@ -333,16 +385,37 @@ class OBD2Collector:
 
                     X_sequences = np.array(sequences)
                     self.cnn_model.fit(X_sequences, X_sequences,
-                                     epochs=10, batch_size=32, verbose=0)
+                                     epochs=10, batch_size=16, verbose=0)
 
-                    self.logger.info("CNN autoencoder retrained")
+                    # Reconvert to TFLite after retraining
+                    converter = tflite.TFLiteConverter.from_keras_model(self.cnn_model)
+                    converter.optimizations = [tf.lite.Optimize.DEFAULT]
+                    converter.representative_dataset = self.representative_dataset_gen
+                    tflite_model = converter.convert()
+
+                    self.tflite_model = tflite_model
+                    self.tflite_interpreter = tflite.Interpreter(model_content=tflite_model)
+                    self.tflite_interpreter.allocate_tensors()
+
+                    # Save updated TFLite model
+                    tflite_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'cnn_model.tflite')
+                    with open(tflite_path, 'wb') as f:
+                        f.write(tflite_model)
+
+                    self.logger.info("CNN autoencoder retrained and TFLite updated")
 
                 # Compute anomaly score using latest sequence
-                if len(self.data_buffer) >= SEQUENCE_LENGTH and self.cnn_model is not None:
+                if len(self.data_buffer) >= SEQUENCE_LENGTH and self.tflite_interpreter is not None:
                     recent_data = np.array(list(self.data_buffer)[-SEQUENCE_LENGTH:])
-                    recent_sequence = recent_data.reshape(1, SEQUENCE_LENGTH, FEATURE_DIM)
+                    recent_sequence = recent_data.reshape(1, SEQUENCE_LENGTH, FEATURE_DIM).astype(np.float32)
 
-                    reconstructed = self.cnn_model.predict(recent_sequence, verbose=0)
+                    input_details = self.tflite_interpreter.get_input_details()
+                    output_details = self.tflite_interpreter.get_output_details()
+
+                    self.tflite_interpreter.set_tensor(input_details[0]['index'], recent_sequence)
+                    self.tflite_interpreter.invoke()
+                    reconstructed = self.tflite_interpreter.get_tensor(output_details[0]['index'])
+
                     reconstruction_error = np.mean(np.square(recent_sequence - reconstructed))
 
                     # Normalize anomaly score (0-1)
@@ -372,6 +445,10 @@ class OBD2Collector:
                 self.cnn_model.save(model_path)
                 checkpoint['model_saved'] = True
 
+            # Check if TFLite model exists
+            tflite_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'cnn_model.tflite')
+            checkpoint['tflite_saved'] = os.path.exists(tflite_path)
+
             with open(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'checkpoint.json'), 'w') as f:
                 json.dump(checkpoint, f)
 
@@ -396,10 +473,18 @@ class OBD2Collector:
 
                 # Load model if saved
                 model_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'cnn_model.h5')
-                if os.path.exists(model_path) and checkpoint.get('model_saved', False):
+                tflite_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'cnn_model.tflite')
+                if os.path.exists(tflite_path) and checkpoint.get('tflite_saved', False):
+                    with open(tflite_path, 'rb') as f:
+                        self.tflite_model = f.read()
+                    self.tflite_interpreter = tflite.Interpreter(model_content=self.tflite_model)
+                    self.tflite_interpreter.allocate_tensors()
+                    self.is_training = False
+                    self.logger.info("TFLite model loaded from checkpoint")
+                elif os.path.exists(model_path) and checkpoint.get('model_saved', False):
                     self.cnn_model = tf.keras.models.load_model(model_path)
                     self.is_training = False
-                    self.logger.info("CNN model loaded from checkpoint")
+                    self.logger.info("Keras model loaded from checkpoint")
                 elif len(self.data_buffer) >= self.min_training_samples:
                     # Retrain if no saved model but have data
                     X = np.array(list(self.data_buffer))
@@ -413,7 +498,7 @@ class OBD2Collector:
                     X_sequences = np.array(sequences)
                     self.cnn_model = self.create_cnn_autoencoder()
                     self.cnn_model.fit(X_sequences, X_sequences,
-                                     epochs=50, batch_size=32, verbose=0)
+                                     epochs=50, batch_size=16, verbose=0)
                     self.is_training = False
                     self.logger.info("CNN model retrained from checkpoint data")
                 else:
@@ -439,7 +524,7 @@ class OBD2Collector:
         start_http_server(PROMETHEUS_PORT)
         self.logger.info(f"Prometheus metrics server started on port {PROMETHEUS_PORT}")
 
-        collection_interval = 1.0  # 1 second intervals
+        collection_interval = 0.5  # 2 Hz intervals
 
         try:
             while not self.shutdown_event.is_set():

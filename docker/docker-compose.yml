@@ -76,10 +76,37 @@ services:
           memory: 75M
           cpus: "0.1"
 
+  grafana:
+    image: grafana/grafana:latest
+    container_name: obd2_grafana
+    ports:
+      - "3000:3000"
+    networks:
+      - obd2_network
+    volumes:
+      - ../grafana_data:/var/lib/grafana
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    restart: unless-stopped
+    depends_on:
+      - obd2-monitor
+    # Memory limits
+    deploy:
+      resources:
+        limits:
+          memory: 100M
+          cpus: "0.2"
+        reservations:
+          memory: 50M
+          cpus: "0.1"
+
 networks:
   obd2_network:
     driver: bridge
 
 volumes:
   prometheus_data:
+    driver: local
+  grafana_data:
     driver: local
