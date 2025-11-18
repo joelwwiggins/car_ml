@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-OBD2 Data Collector with GMM Anomaly Detection for Raspberry Pi Zero 2W
+OBD2 Data Collector with CNN Anomaly Detection for Raspberry Pi Zero 2W
 Optimized for 512MB RAM with lightweight processing and robust error handling.
 """
 
@@ -19,16 +19,19 @@ import can
 import serial
 from prometheus_client import start_http_server, Gauge, Counter, Histogram
 
-# ML libraries for GMM
+# ML libraries for CNN anomaly detection
 import numpy as np
-from sklearn.mixture import GaussianMixture
+import tensorflow as tf
+from tensorflow.keras import layers, models
 from sklearn.preprocessing import StandardScaler
 
 # Configuration
 CAN_INTERFACE = 'can0'
 CAN_BITRATE = 500000
 PROMETHEUS_PORT = 8000
-DATA_BUFFER_SIZE = 100
+DATA_BUFFER_SIZE = 1000  # Store more data for sequences
+SEQUENCE_LENGTH = 64    # Length of time sequences for CNN
+FEATURE_DIM = 4         # Number of sensor features
 LOG_FILE = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'logs', 'obd2_collector.log')
 CONFIG_FILE = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config', 'obd2_config.json')
 
@@ -38,7 +41,7 @@ obd2_rpm = Gauge('obd2_engine_rpm', 'Engine RPM')
 obd2_speed = Gauge('obd2_vehicle_speed', 'Vehicle speed (km/h)')
 obd2_fuel_level = Gauge('obd2_fuel_level', 'Fuel level (%)')
 obd2_voltage = Gauge('obd2_battery_voltage', 'Battery voltage (V)')
-obd2_anomaly_score = Gauge('obd2_anomaly_score', 'GMM anomaly detection score (0-1)')
+obd2_anomaly_score = Gauge('obd2_anomaly_score', 'CNN autoencoder anomaly detection score (0-1)')
 obd2_error_count = Counter('obd2_errors_total', 'Total OBD2 communication errors')
 obd2_data_points = Counter('obd2_data_points_total', 'Total data points collected')
 
@@ -46,11 +49,11 @@ class OBD2Collector:
     def __init__(self):
         self.logger = self._setup_logging()
         self.data_buffer = deque(maxlen=DATA_BUFFER_SIZE)
-        self.gmm_model = None
+        self.cnn_model = None
         self.scaler = StandardScaler()
         self.is_training = True
         self.training_samples = 0
-        self.min_training_samples = 100
+        self.min_training_samples = SEQUENCE_LENGTH  # Need sequence length for training
         self.shutdown_event = threading.Event()
         self.mock_mode = False  # Add mock mode flag
 
@@ -70,6 +73,29 @@ class OBD2Collector:
         self.serial_conn = None
 
         self.logger.info("OBD2 Collector initialized")
+
+    def create_cnn_autoencoder(self):
+        """Create 1D CNN autoencoder for anomaly detection."""
+        input_shape = (SEQUENCE_LENGTH, FEATURE_DIM)
+
+        # Encoder
+        encoder_input = layers.Input(shape=input_shape)
+        x = layers.Conv1D(16, 7, activation='relu', padding='same')(encoder_input)
+        x = layers.MaxPooling1D(2)(x)
+        x = layers.Conv1D(8, 5, activation='relu', padding='same')(x)
+        encoded = layers.MaxPooling1D(2)(x)
+
+        # Decoder
+        x = layers.Conv1D(8, 5, activation='relu', padding='same')(encoded)
+        x = layers.UpSampling1D(2)(x)
+        x = layers.Conv1D(16, 7, activation='relu', padding='same')(x)
+        x = layers.UpSampling1D(2)(x)
+        decoded = layers.Conv1D(FEATURE_DIM, 3, activation='linear', padding='same')(x)
+
+        autoencoder = models.Model(encoder_input, decoded)
+        autoencoder.compile(optimizer='adam', loss='mse')
+
+        return autoencoder
 
     def _setup_logging(self) -> logging.Logger:
         """Setup comprehensive logging for debugging and monitoring."""
@@ -257,17 +283,18 @@ class OBD2Collector:
             obd2_voltage.set(voltage)
             return voltage
 
-    def update_gmm_model(self, data_point: Dict):
-        """Update GMM model with new data point."""
-        # Extract features for GMM (exclude timestamp and battery voltage)
+    def update_cnn_model(self, data_point: Dict):
+        """Update CNN autoencoder model with new data point."""
+        # Extract features for CNN (exclude timestamp and battery voltage)
         features = [v for k, v in data_point.items()
                    if k not in ['timestamp', 'battery_voltage'] and isinstance(v, (int, float))]
 
-        if len(features) < 2:
+        if len(features) != FEATURE_DIM:
             return
 
         # Add to buffer
         self.data_buffer.append(features)
+        self.training_samples += 1
 
         # Convert to numpy array for training
         if len(self.data_buffer) >= self.min_training_samples:
@@ -278,21 +305,49 @@ class OBD2Collector:
                 self.scaler.fit(X)
                 X_scaled = self.scaler.transform(X)
 
-                self.gmm_model = GaussianMixture(n_components=2, random_state=42)
-                self.gmm_model.fit(X_scaled)
+                # Create sequences for CNN
+                sequences = []
+                for i in range(len(X_scaled) - SEQUENCE_LENGTH + 1):
+                    seq = X_scaled[i:i + SEQUENCE_LENGTH]
+                    sequences.append(seq)
+
+                X_sequences = np.array(sequences)
+
+                # Create and train CNN autoencoder
+                self.cnn_model = self.create_cnn_autoencoder()
+                self.cnn_model.fit(X_sequences, X_sequences,
+                                 epochs=50, batch_size=32, verbose=0)
 
                 self.is_training = False
-                self.logger.info("GMM model trained with initial data")
+                self.logger.info("CNN autoencoder trained with initial data")
 
             else:
-                # Update existing model (simplified - in practice you'd retrain periodically)
-                X_scaled = self.scaler.transform(X)
-                scores = self.gmm_model.score_samples(X_scaled)
+                # Update existing model (retrain periodically)
+                if self.training_samples % 1000 == 0:  # Retrain every 1000 samples
+                    X_scaled = self.scaler.transform(X)
 
-                # Anomaly score is negative log likelihood (higher = more anomalous)
-                current_score = -scores[-1]  # Most recent point
-                normalized_score = min(current_score / 10.0, 1.0)  # Normalize to 0-1
-                obd2_anomaly_score.set(normalized_score)
+                    sequences = []
+                    for i in range(len(X_scaled) - SEQUENCE_LENGTH + 1):
+                        seq = X_scaled[i:i + SEQUENCE_LENGTH]
+                        sequences.append(seq)
+
+                    X_sequences = np.array(sequences)
+                    self.cnn_model.fit(X_sequences, X_sequences,
+                                     epochs=10, batch_size=32, verbose=0)
+
+                    self.logger.info("CNN autoencoder retrained")
+
+                # Compute anomaly score using latest sequence
+                if len(self.data_buffer) >= SEQUENCE_LENGTH:
+                    recent_data = np.array(list(self.data_buffer)[-SEQUENCE_LENGTH:])
+                    recent_sequence = recent_data.reshape(1, SEQUENCE_LENGTH, FEATURE_DIM)
+
+                    reconstructed = self.cnn_model.predict(recent_sequence, verbose=0)
+                    reconstruction_error = np.mean(np.square(recent_sequence - reconstructed))
+
+                    # Normalize anomaly score (0-1)
+                    normalized_score = min(reconstruction_error * 100, 1.0)  # Scale factor may need tuning
+                    obd2_anomaly_score.set(normalized_score)
 
     def check_low_voltage_shutdown(self, voltage: float):
         """Check if voltage is low enough to trigger shutdown."""
@@ -311,6 +366,12 @@ class OBD2Collector:
                 'scaler_scale': self.scaler.scale_.tolist() if hasattr(self.scaler, 'scale_') else None,
             }
 
+            # Save model if it exists
+            if self.cnn_model is not None:
+                model_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'cnn_model.h5')
+                self.cnn_model.save(model_path)
+                checkpoint['model_saved'] = True
+
             with open(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'checkpoint.json'), 'w') as f:
                 json.dump(checkpoint, f)
 
@@ -320,8 +381,9 @@ class OBD2Collector:
     def load_checkpoint(self):
         """Load previous model state."""
         try:
-            if os.path.exists(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'checkpoint.json')):
-                with open(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'checkpoint.json'), 'r') as f:
+            checkpoint_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'checkpoint.json')
+            if os.path.exists(checkpoint_path):
+                with open(checkpoint_path, 'r') as f:
                     checkpoint = json.load(f)
 
                 self.data_buffer.extend(checkpoint.get('data_buffer', []))
@@ -332,14 +394,28 @@ class OBD2Collector:
                     self.scaler.mean_ = np.array(checkpoint['scaler_mean'])
                     self.scaler.scale_ = np.array(checkpoint['scaler_scale'])
 
-                # If we have enough data, retrain the model
-                if len(self.data_buffer) >= self.min_training_samples:
-                    X = np.array(list(self.data_buffer))
-                    X_scaled = self.scaler.transform(X)
-                    self.gmm_model = GaussianMixture(n_components=2, random_state=42)
-                    self.gmm_model.fit(X_scaled)
+                # Load model if saved
+                model_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'cnn_model.h5')
+                if os.path.exists(model_path) and checkpoint.get('model_saved', False):
+                    self.cnn_model = tf.keras.models.load_model(model_path)
                     self.is_training = False
-                    self.logger.info("GMM model retrained from checkpoint data")
+                    self.logger.info("CNN model loaded from checkpoint")
+                elif len(self.data_buffer) >= self.min_training_samples:
+                    # Retrain if no saved model but have data
+                    X = np.array(list(self.data_buffer))
+                    X_scaled = self.scaler.fit_transform(X) if not hasattr(self.scaler, 'mean_') else self.scaler.transform(X)
+
+                    sequences = []
+                    for i in range(len(X_scaled) - SEQUENCE_LENGTH + 1):
+                        seq = X_scaled[i:i + SEQUENCE_LENGTH]
+                        sequences.append(seq)
+
+                    X_sequences = np.array(sequences)
+                    self.cnn_model = self.create_cnn_autoencoder()
+                    self.cnn_model.fit(X_sequences, X_sequences,
+                                     epochs=50, batch_size=32, verbose=0)
+                    self.is_training = False
+                    self.logger.info("CNN model retrained from checkpoint data")
                 else:
                     self.is_training = True
 
@@ -376,8 +452,8 @@ class OBD2Collector:
                     # Update metrics
                     obd2_data_points.inc()
 
-                    # Update GMM model
-                    self.update_gmm_model(data_point)
+                    # Update CNN model
+                    self.update_cnn_model(data_point)
 
                     # Check for low voltage
                     voltage = data_point.get('battery_voltage', 12.0)

@@ -1,11 +1,11 @@
-# OBD2 Vehicle Monitor with GMM Anomaly Detection
+# OBD2 Vehicle Monitor with CNN Anomaly Detection
 
-Real-time OBD2 data collection and monitoring system optimized for Raspberry Pi Zero 2W (512MB RAM). Uses Gaussian Mixture Models for anomaly detection and provides a web dashboard via Prometheus.
+Real-time OBD2 data collection and monitoring system optimized for Raspberry Pi Zero 2W (512MB RAM). Uses Convolutional Neural Network autoencoder for anomaly detection and provides a web dashboard via Prometheus.
 
 ## Features
 
 - 🚗 **OBD2 Data Collection**: Engine temperature, RPM, speed, fuel level
-- 🤖 **AI Anomaly Detection**: GMM-based outlier detection on sensor data
+- 🤖 **AI Anomaly Detection**: CNN autoencoder-based outlier detection on time-series sensor data
 - 📊 **Real-time Dashboard**: Web interface with live metrics
 - 🐳 **Docker Optimized**: Lightweight containers for RPi Zero 2W
 - 🔋 **Low Voltage Protection**: Automatic shutdown on battery drain
@@ -18,7 +18,7 @@ Real-time OBD2 data collection and monitoring system optimized for Raspberry Pi 
 ```
 ┌─────────────────┐    ┌──────────────────┐
 │   OBD2 Collector │    │  Prometheus +    │
-│   (Data + GMM)   │◄──►│   Dashboard      │
+│   (Data + CNN)   │◄──►│   Dashboard      │
 │                 │    │                  │
 │ • CAN bus data  │    │ • Web UI         │
 │ • Anomaly scores │    │ • Metrics API    │
@@ -117,9 +117,9 @@ sudo systemctl start obd2-monitor voltage-monitor
   "can_interface": "can0",
   "can_bitrate": 500000,
   "prometheus_port": 8000,
-  "data_buffer_size": 100,
-  "low_voltage_threshold": 11.5,
-  "gmm_components": 2
+  "data_buffer_size": 1000,
+  "sequence_length": 50,
+  "low_voltage_threshold": 11.5
 }
 ```
 
@@ -194,17 +194,19 @@ ip link show can0
 
 ## Anomaly Detection
 
-### GMM Model
+### CNN Autoencoder Model
 
-- **Training**: Automatic after 50 samples
-- **Components**: 2 mixture components
+- **Architecture**: 1D Convolutional Autoencoder with encoder-decoder structure
+- **Input**: Time sequences of 50 samples × 4 sensor features
+- **Training**: Automatic after collecting sufficient normal operation data
 - **Features**: Engine temp, RPM, speed, fuel level
+- **Anomaly Score**: Reconstruction error (MSE between input and output)
 - **Threshold**: Score > 0.6 = warning, > 0.8 = critical
 
 ### Real-time Scoring
 
 - Updates every data collection cycle
-- Normalized anomaly score (0-1)
+- Normalized anomaly score (0-1) based on reconstruction error
 - Dashboard shows real-time status
 
 ## Monitoring & Logging
@@ -327,9 +329,9 @@ import obd2_collector
 ### RPi Zero 2W Benchmarks
 
 - **Startup Time**: 8-12 seconds
-- **Memory Usage**: ~350MB total
+- **Memory Usage**: ~400MB total (CNN model + data buffer)
 - **Data Collection**: 1Hz
-- **Anomaly Detection**: <100ms per cycle
+- **Anomaly Detection**: <200ms per cycle (includes sequence processing)
 
 ### Optimization Features
 
