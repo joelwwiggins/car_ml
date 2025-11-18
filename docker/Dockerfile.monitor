@@ -2,7 +2,7 @@
 # Optimized for Raspberry Pi Zero 2W (ARM64, 512MB RAM)
 
 # Stage 1: Builder stage for downloading and setting up Prometheus
-FROM --platform=linux/arm64 arm64v8/debian:bookworm-slim AS prometheus-builder
+FROM debian:bookworm-slim AS prometheus-builder
 
 # Install wget and ca-certificates for downloading
 RUN apt-get update && apt-get install -y \
@@ -10,14 +10,14 @@ RUN apt-get update && apt-get install -y \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Download and extract Prometheus (ARM64)
-RUN wget -q https://github.com/prometheus/prometheus/releases/download/v2.45.0/prometheus-2.45.0.linux-arm64.tar.gz \
-    && tar -xzf prometheus-2.45.0.linux-arm64.tar.gz \
-    && mv prometheus-2.45.0.linux-arm64 /opt/prometheus \
-    && rm prometheus-2.45.0.linux-arm64.tar.gz
+# Download and extract Prometheus (AMD64)
+RUN wget -q https://github.com/prometheus/prometheus/releases/download/v2.45.0/prometheus-2.45.0.linux-amd64.tar.gz \
+    && tar -xzf prometheus-2.45.0.linux-amd64.tar.gz \
+    && mv prometheus-2.45.0.linux-amd64 /opt/prometheus \
+    && rm prometheus-2.45.0.linux-amd64.tar.gz
 
 # Stage 2: Python builder stage
-FROM --platform=linux/arm64 arm64v8/python:3.11-slim-bookworm AS python-builder
+FROM python:3.11-slim-bookworm AS python-builder
 
 # Create virtual environment
 RUN python3 -m venv /opt/venv
@@ -31,7 +31,7 @@ RUN pip install --no-cache-dir \
     requests
 
 # Stage 3: Runtime stage (minimal final image)
-FROM --platform=linux/arm64 arm64v8/debian:bookworm-slim
+FROM debian:bookworm-slim
 
 # Install only essential runtime dependencies
 RUN apt-get update && apt-get install -y \
@@ -53,10 +53,10 @@ WORKDIR /app
 RUN mkdir -p /app/data /app/config /etc/prometheus
 
 # Copy Prometheus configuration
-COPY ../config/prometheus.yml /etc/prometheus/prometheus.yml
+COPY config/prometheus.yml /etc/prometheus/prometheus.yml
 
 # Copy dashboard application
-COPY ../src/dashboard.py .
+COPY src/dashboard.py .
 
 # Create non-root user
 RUN useradd --create-home --shell /bin/bash monitor && \

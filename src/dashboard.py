@@ -13,7 +13,7 @@ import logging
 app = Flask(__name__)
 
 # Prometheus endpoint
-PROMETHEUS_URL = "http://localhost:9090"
+METRICS_URL = "http://localhost:8000/metrics"
 
 # Cache for metrics
 metrics_cache = {}
@@ -204,19 +204,23 @@ HTML_TEMPLATE = """
 """
 
 def query_prometheus(query):
-    """Query Prometheus for metrics."""
+    """Query metrics from collector's /metrics endpoint."""
     try:
-        response = requests.get(f"{PROMETHEUS_URL}/api/v1/query", params={"query": query}, timeout=5)
+        response = requests.get(METRICS_URL, timeout=5)
         if response.status_code == 200:
-            data = response.json()
-            if data['data']['result']:
-                return data['data']['result'][0]['value'][1]
+            lines = response.text.split('\n')
+            for line in lines:
+                if line.startswith(query):
+                    parts = line.split()
+                    if len(parts) >= 2:
+                        return parts[1]
     except Exception as e:
-        logging.error(f"Prometheus query failed: {e}")
+        logging.error(f"Metrics query failed: {e}")
     return None
 
 def get_metrics():
     """Get all metrics from Prometheus."""
+    global cache_timestamp, metrics_cache
     current_time = time.time()
 
     # Use cache if recent

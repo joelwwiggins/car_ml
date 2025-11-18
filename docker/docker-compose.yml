@@ -3,10 +3,8 @@ version: "3.8"
 services:
   obd2-collector:
     build:
-      context: .
-      dockerfile: Dockerfile.data
-      platforms:
-        - linux/arm64
+      context: ..
+      dockerfile: docker/Dockerfile.data
     container_name: obd2_collector
     privileged: true # Required for CAN bus access
     devices:
@@ -45,10 +43,8 @@ services:
 
   obd2-monitor:
     build:
-      context: .
-      dockerfile: Dockerfile.monitor
-      platforms:
-        - linux/arm64
+      context: ..
+      dockerfile: docker/Dockerfile.monitor
     container_name: obd2_monitor
     ports:
       - "9090:9090" # Prometheus

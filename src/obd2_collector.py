@@ -338,7 +338,7 @@ class OBD2Collector:
                     self.logger.info("CNN autoencoder retrained")
 
                 # Compute anomaly score using latest sequence
-                if len(self.data_buffer) >= SEQUENCE_LENGTH:
+                if len(self.data_buffer) >= SEQUENCE_LENGTH and self.cnn_model is not None:
                     recent_data = np.array(list(self.data_buffer)[-SEQUENCE_LENGTH:])
                     recent_sequence = recent_data.reshape(1, SEQUENCE_LENGTH, FEATURE_DIM)
 

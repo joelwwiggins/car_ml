@@ -2,7 +2,7 @@
 # Optimized for Raspberry Pi Zero 2W (ARM64, 512MB RAM)
 
 # Stage 1: Builder stage for compiling dependencies
-FROM --platform=linux/arm64 arm64v8/python:3.11-slim-bookworm AS builder
+FROM python:3.11-slim-bookworm AS builder
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y \
@@ -21,7 +21,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Stage 2: Runtime stage (minimal final image)
-FROM --platform=linux/arm64 arm64v8/python:3.11-slim-bookworm
+FROM python:3.11-slim-bookworm
 
 # Install only runtime system dependencies
 RUN apt-get update && apt-get install -y \
