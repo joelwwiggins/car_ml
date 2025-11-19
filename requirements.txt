@@ -5,6 +5,7 @@ pyserial==3.5
 requests==2.32.5
 scikit-learn==1.7.2
 tensorflow==2.16.1
+matplotlib==3.8.4
 
 # Minimal Adafruit for voltage monitoring
 Adafruit-Blinka==8.67.0
