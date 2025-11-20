@@ -19,8 +19,13 @@ import serial
 
 # ML for anomaly detection
 import numpy as np
-from sklearn.preprocessing import StandardScaler
-import tensorflow as tf
+try:
+    import tflite_runtime.interpreter as tflite
+except ImportError:
+    try:
+        import tensorflow.lite as tflite
+    except ImportError:
+        tflite = None
 
 # Prometheus
 from prometheus_client import start_http_server, Gauge, Counter
@@ -67,12 +72,29 @@ obd2_metrics = {
 obd2_data_points = Counter('obd2_data_points_total', 'Data points collected')
 obd2_errors = Counter('obd2_errors_total', 'Communication errors')
 
+class SimpleScaler:
+    def __init__(self):
+        self.mean = None
+        self.scale = None
+
+    def fit(self, data):
+        data = np.array(data)
+        self.mean = np.mean(data, axis=0)
+        self.scale = np.std(data, axis=0)
+        # Avoid division by zero
+        self.scale[self.scale == 0] = 1.0
+
+    def transform(self, data):
+        if self.mean is None or self.scale is None:
+            return np.array(data)
+        return (np.array(data) - self.mean) / self.scale
+
 class OBD2Collector:
     def __init__(self):
         self.bus = None
         self.serial_conn = None
         self.interpreter = None
-        self.scaler = StandardScaler()
+        self.scaler = SimpleScaler()
         self.data_buffer = deque(maxlen=BUFFER_SIZE)
         self.is_trained = False
         self.shutdown_event = threading.Event()
@@ -108,13 +130,13 @@ class OBD2Collector:
 
     def load_model(self):
         """Load INT8 quantized TFLite model."""
-        model_path = os.path.join(os.path.dirname(__file__), '..', 'cnn_model_int8.tflite')
-        if os.path.exists(model_path):
-            self.interpreter = tf.lite.Interpreter(model_path=model_path)
+        model_path = os.path.join(os.path.dirname(__file__), '..', 'models/cnn_model_int8.tflite')
+        if os.path.exists(model_path) and tflite is not None:
+            self.interpreter = tflite.Interpreter(model_path=model_path)
             self.interpreter.allocate_tensors()
             print("TFLite model loaded")
         else:
-            print("Warning: TFLite model not found, running without anomaly detection")
+            print("Warning: TFLite model not found or runtime missing, running without anomaly detection")
 
     def setup_interfaces(self):
         """Setup CAN or serial interfaces."""
@@ -150,8 +172,14 @@ class OBD2Collector:
             try:
                 self.serial_conn.write(f"01{pid:02X}\r".encode())
                 time.sleep(0.1)
-                return self.serial_conn.read(100)
+                response_line = self.serial_conn.readline().decode().strip()
+                if response_line and "41" in response_line:
+                    parts = response_line.split()
+                    if len(parts) >= 3 and parts[0] == "41" and int(parts[1], 16) == pid:
+                        data = bytes([0x41, pid] + [int(x, 16) for x in parts[2:]])
+                        return data
             except:
+                obd2_errors.inc()
                 obd2_errors.inc()
         return None
 

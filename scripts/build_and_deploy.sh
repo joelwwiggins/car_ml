@@ -13,19 +13,19 @@ docker buildx create --use --name cross-builder 2>/dev/null || docker buildx use
 echo "Building data collector container..."
 docker buildx build \
     --platform linux/arm64 \
-    --file Dockerfile.data \
+    --file docker/Dockerfile \
     --tag obd2-collector:arm64 \
     --load \
     .
 
 # Build monitoring container (ARM64)
-echo "Building monitoring container..."
-docker buildx build \
-    --platform linux/arm64 \
-    --file Dockerfile.monitor \
-    --tag obd2-monitor:arm64 \
-    --load \
-    .
+# echo "Building monitoring container..."
+# docker buildx build \
+#     --platform linux/arm64 \
+#     --file Dockerfile.monitor \
+#     --tag obd2-monitor:arm64 \
+#     --load \
+#     .
 
 echo "✅ Containers built successfully!"
 echo ""
@@ -33,7 +33,7 @@ echo "📦 Deployment Options:"
 echo ""
 echo "Option 1 - Save to tar files for transfer:"
 echo "docker save obd2-collector:arm64 > obd2-collector-arm64.tar"
-echo "docker save obd2-monitor:arm64 > obd2-monitor-arm64.tar"
+# echo "docker save obd2-monitor:arm64 > obd2-monitor-arm64.tar"
 echo "scp *.tar pi@<rpi-ip>:/home/pi/"
 echo ""
 echo "Option 2 - Push to registry (requires registry access):"

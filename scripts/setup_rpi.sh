@@ -17,11 +17,14 @@ sudo apt-get install -y \
     iproute2 \
     net-tools \
     python3-dev \
+    python3-venv \
+    python3-pip \
     build-essential \
     libatlas-base-dev \
     docker.io \
-    docker-compose \
-    git
+    docker-compose-plugin \
+    git \
+    python3-tflite-runtime
 
 # Enable SPI and I2C (for some CAN HATs)
 echo "Enabling SPI and I2C interfaces..."
@@ -91,8 +94,8 @@ Requires=docker.service
 Type=simple
 User=root
 WorkingDirectory=/home/pi/obd2_monitor
-ExecStart=/usr/bin/docker-compose up
-ExecStop=/usr/bin/docker-compose down
+ExecStart=/usr/bin/docker compose up
+ExecStop=/usr/bin/docker compose down
 Restart=always
 RestartSec=10
 
@@ -104,17 +107,13 @@ sudo systemctl daemon-reload
 sudo systemctl enable obd2-monitor.service
 
 # Setup ADC for voltage monitoring (ADS1015 via I2C)
+# Note: On Bookworm, use a venv or --break-system-packages if installing globally
 echo "Setting up ADS1015 ADC for voltage monitoring..."
-sudo pip3 install adafruit-circuitpython-ads1x15 adafruit-blinka
+# We rely on the container for this now, so no need to install globally unless running outside docker
+# sudo pip3 install adafruit-circuitpython-ads1x15 adafruit-blinka --break-system-packages
 
 # Enable I2C (already done above, but ensure)
 sudo raspi-config nonint do_i2c 0
-
-# Setup voltage monitor systemd service
-echo "Setting up voltage monitor service..."
-sudo cp voltage-monitor.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable voltage-monitor.service
 
 # Setup firewall (optional)
 echo "Setting up firewall..."
