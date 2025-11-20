@@ -17,7 +17,6 @@ services:
     restart: unless-stopped
     environment:
       - PYTHONUNBUFFERED=1
-    # Memory limits for Pi Zero 2W (512MB total)
     deploy:
       resources:
         limits:
@@ -26,6 +25,79 @@ services:
         reservations:
           memory: 100M
           cpus: "0.2"
+
+  victoriametrics:
+    image: victoriametrics/victoria-metrics:latest
+    container_name: victoriametrics
+    command:
+      - -storageDataPath=/storage
+    volumes:
+      - ./config:/etc/victoriametrics:ro
+      - /data/victoria:/storage
+    ports:
+      - "8428:8428"
+    networks:
+      - obd2_network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 100M
+          cpus: "0.3"
+        reservations:
+          memory: 50M
+          cpus: "0.1"
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    volumes:
+      - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
+      - /data/grafana:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    networks:
+      - obd2_network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 100M
+          cpus: "0.3"
+        reservations:
+          memory: 50M
+          cpus: "0.1"
+    depends_on:
+      - victoriametrics
+
+  node-exporter:
+    image: prom/node-exporter:latest
+    container_name: node_exporter
+    command:
+      - --collector.disable-defaults
+      - --collector.cpu
+      - --collector.meminfo
+      - --collector.loadavg
+      - --collector.filesystem
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    ports:
+      - "9100:9100"
+    networks:
+      - obd2_network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 20M
+          cpus: "0.1"
+        reservations:
+          memory: 10M
+          cpus: "0.05"
 
 networks:
   obd2_network:
