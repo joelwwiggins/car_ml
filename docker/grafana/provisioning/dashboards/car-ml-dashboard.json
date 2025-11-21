@@ -1,0 +1,99 @@
+{
+    "id": null,
+    "title": "Car ML Dashboard",
+    "tags": [
+        "car",
+        "ml",
+        "obd2"
+    ],
+    "timezone": "browser",
+    "panels": [
+        {
+            "id": 1,
+            "title": "CPU Usage",
+            "type": "graph",
+            "targets": [
+                {
+                    "expr": "100 - (avg by(instance) (irate(node_cpu_seconds_total{mode=\"idle\"}[5m])) * 100)",
+                    "legendFormat": "CPU Usage",
+                    "datasource": "VictoriaMetrics"
+                }
+            ],
+            "gridPos": {
+                "h": 8,
+                "w": 12,
+                "x": 0,
+                "y": 0
+            }
+        },
+        {
+            "id": 2,
+            "title": "Memory Usage",
+            "type": "graph",
+            "targets": [
+                {
+                    "expr": "100 - ((node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100)",
+                    "legendFormat": "Memory Usage %",
+                    "datasource": "VictoriaMetrics"
+                }
+            ],
+            "gridPos": {
+                "h": 8,
+                "w": 12,
+                "x": 12,
+                "y": 0
+            }
+        },
+        {
+            "id": 3,
+            "title": "OBD2 Engine RPM",
+            "type": "graph",
+            "targets": [
+                {
+                    "expr": "obd2_engine_rpm",
+                    "legendFormat": "Engine RPM",
+                    "datasource": "VictoriaMetrics"
+                }
+            ],
+            "gridPos": {
+                "h": 8,
+                "w": 12,
+                "x": 0,
+                "y": 8
+            }
+        },
+        {
+            "id": 4,
+            "title": "OBD2 Vehicle Speed",
+            "type": "graph",
+            "targets": [
+                {
+                    "expr": "obd2_vehicle_speed",
+                    "legendFormat": "Vehicle Speed (km/h)",
+                    "datasource": "VictoriaMetrics"
+                }
+            ],
+            "gridPos": {
+                "h": 8,
+                "w": 12,
+                "x": 12,
+                "y": 8
+            }
+        }
+    ],
+    "time": {
+        "from": "now-1h",
+        "to": "now"
+    },
+    "timepicker": {},
+    "templating": {
+        "list": []
+    },
+    "annotations": {
+        "list": []
+    },
+    "refresh": "5s",
+    "schemaVersion": 27,
+    "version": 0,
+    "links": []
+}

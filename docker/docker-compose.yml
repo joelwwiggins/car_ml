@@ -32,7 +32,6 @@ services:
     command:
       - -storageDataPath=/storage
     volumes:
-      - ./config:/etc/victoriametrics:ro
       - /data/victoria:/storage
     ports:
       - "8428:8428"
@@ -52,7 +51,7 @@ services:
     image: grafana/grafana:latest
     container_name: grafana
     volumes:
-      - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
+      - /home/joel/scripts/car_ml/docker/grafana/provisioning:/etc/grafana/provisioning:ro
       - /data/grafana:/var/lib/grafana
     ports:
       - "3000:3000"
@@ -98,6 +97,17 @@ services:
         reservations:
           memory: 10M
           cpus: "0.05"
+
+  init-data:
+    image: curlimages/curl:latest
+    container_name: init_data
+    volumes:
+      - ./init-data.sh:/init-data.sh
+    command: ["/bin/sh", "/init-data.sh"]
+    depends_on:
+      - victoriametrics
+    networks:
+      - obd2_network
 
 networks:
   obd2_network:
