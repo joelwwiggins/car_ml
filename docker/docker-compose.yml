@@ -31,6 +31,7 @@ services:
       context: ..
       dockerfile: docker/Dockerfile
     container_name: voltage_monitor
+    user: root
     privileged: true
     command: ["python3", "src/voltage_monitor.py"]
     devices:

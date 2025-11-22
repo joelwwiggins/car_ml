@@ -48,12 +48,20 @@ def shutdown():
     print("Initiating shutdown...")
     sys.stdout.flush()
     try:
-        # Try to stop docker containers first?
-        # subprocess.run(['docker', 'compose', 'down'], cwd='/home/joel/scripts/car_ml/docker')
-        # Just system shutdown
-        subprocess.run(['shutdown', '-h', 'now'], check=True)
+        # Use nsenter to execute shutdown on the host (pid 1 namespace)
+        # This requires the container to be privileged and running as root
+        subprocess.run(
+            ['nsenter', '--target', '1', '--mount', '--uts', '--ipc', '--net', '--pid', '--', 'shutdown', '-h', 'now'], 
+            check=True
+        )
     except Exception as e:
         print(f"Shutdown failed: {e}")
+        # Fallback: Try SysRq trigger (hard power off)
+        try:
+            with open('/proc/sysrq-trigger', 'w') as f:
+                f.write('o')
+        except Exception as e2:
+            print(f"SysRq fallback failed: {e2}")
 
 def main():
     if not ADC_AVAILABLE:
