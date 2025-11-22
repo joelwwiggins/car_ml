@@ -1,5 +1,3 @@
-version: "3.8"
-
 services:
   obd2-collector:
     build:
