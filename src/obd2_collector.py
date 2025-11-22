@@ -30,6 +30,9 @@ except ImportError:
 # Prometheus
 from prometheus_client import start_http_server, Gauge, Counter
 
+# Dashboard
+from dashboard import update_dashboard_metrics, update_dashboard_data_point
+
 # Voltage monitoring
 ADC_AVAILABLE = False
 try:

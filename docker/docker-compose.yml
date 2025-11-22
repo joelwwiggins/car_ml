@@ -14,7 +14,7 @@ services:
       - "8000:8000" # Prometheus metrics
     networks:
       - obd2_network
-    restart: unless-stopped
+    restart: always
     environment:
       - PYTHONUNBUFFERED=1
     deploy:
@@ -25,6 +25,22 @@ services:
         reservations:
           memory: 100M
           cpus: "0.2"
+
+  voltage-monitor:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: voltage_monitor
+    privileged: true
+    command: ["python3", "src/voltage_monitor.py"]
+    devices:
+      - /dev/i2c-1:/dev/i2c-1
+    restart: always
+    deploy:
+      resources:
+        limits:
+          memory: 50M
+          cpus: "0.1"
 
   victoriametrics:
     image: victoriametrics/victoria-metrics:latest
@@ -88,7 +104,7 @@ services:
       - "9100:9100"
     networks:
       - obd2_network
-    restart: unless-stopped
+    restart: always
     deploy:
       resources:
         limits:
