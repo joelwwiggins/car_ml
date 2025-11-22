@@ -2,7 +2,7 @@ services:
   obd2-collector:
     build:
       context: .
-      dockerfile: docker/Dockerfile
+      dockerfile: Dockerfile
     container_name: obd2_collector
     privileged: true
     devices:
@@ -27,7 +27,7 @@ services:
   voltage-monitor:
     build:
       context: .
-      dockerfile: docker/Dockerfile
+      dockerfile: Dockerfile
     container_name: voltage_monitor
     user: root
     privileged: true
