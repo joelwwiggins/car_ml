@@ -1,7 +1,7 @@
 services:
   obd2-collector:
     build:
-      context: ..
+      context: .
       dockerfile: docker/Dockerfile
     container_name: obd2_collector
     privileged: true
@@ -26,7 +26,7 @@ services:
 
   voltage-monitor:
     build:
-      context: ..
+      context: .
       dockerfile: docker/Dockerfile
     container_name: voltage_monitor
     user: root
@@ -66,7 +66,7 @@ services:
     image: grafana/grafana:latest
     container_name: grafana
     volumes:
-      - /home/joel/scripts/car_ml/docker/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
       - /data/grafana:/var/lib/grafana
     ports:
       - "3000:3000"
@@ -75,6 +75,8 @@ services:
     networks:
       - obd2_network
     restart: unless-stopped
+    depends_on:
+      - victoriametrics
     deploy:
       resources:
         limits:
@@ -83,8 +85,6 @@ services:
         reservations:
           memory: 50M
           cpus: "0.1"
-    depends_on:
-      - victoriametrics
 
   node-exporter:
     image: prom/node-exporter:latest
@@ -117,7 +117,7 @@ services:
     image: curlimages/curl:latest
     container_name: init_data
     volumes:
-      - ./init-data.sh:/init-data.sh
+      - ./docker/init-data.sh:/init-data.sh
     command: ["/bin/sh", "/init-data.sh"]
     depends_on:
       - victoriametrics
