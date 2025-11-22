@@ -66,7 +66,6 @@ services:
     image: grafana/grafana:latest
     container_name: grafana
     volumes:
-      - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
       - /data/grafana:/var/lib/grafana
     ports:
       - "3000:3000"
