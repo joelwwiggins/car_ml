@@ -3,6 +3,7 @@ FROM python:3.12-slim-bookworm
 
 # Install minimal runtime dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
     can-utils \
     iproute2 \
     net-tools \
