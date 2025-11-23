@@ -1,15 +1,16 @@
 # Lean OBD2 Collector with CNN Anomaly Detection
 
-Ultra-lightweight OBD2 data collection and multivariate anomaly detection optimized for Raspberry Pi Zero 2W (512MB RAM). Single-container deployment with TFLite inference and Prometheus metrics export.
+Ultra-lightweight OBD2 data collection and multivariate anomaly detection optimized for Raspberry Pi Zero 2W (512MB RAM). Single-container deployment with TFLite inference, SQLite storage, and real-time Flask WebSocket dashboard.
 
 ## Features
 
 - 🚗 **OBD2 Data Collection**: 12 PIDs including engine sensors, fuel system, and timing
 - 🤖 **TFLite Anomaly Detection**: INT8-quantized CNN autoencoder for efficient inference
-- 📊 **Prometheus Export**: Direct metrics exposure for external monitoring
+- � **SQLite Storage**: Persistent data storage with historical trends
+- 🌐 **Flask WebSocket Dashboard**: Real-time monitoring with live charts
 - 🔋 **Battery Protection**: ADC-based voltage monitoring with safe shutdown
-- 🐳 **Single Container**: ≤180MB Docker image optimized for ARM64
-- ⚡ **Low Resource**: <200MB runtime memory on Pi Zero 2W
+- 🐳 **Single Container**: ≤256MB Docker image optimized for ARM64
+- ⚡ **Low Resource**: <256MB runtime memory on Pi Zero 2W
 
 ## Project Structure
 
@@ -19,11 +20,9 @@ car_ml/
 ├── requirements.txt             # Development dependencies
 ├── requirements.prod.txt        # Production dependencies (minimal)
 ├── config/
-│   ├── obd2_config.json         # OBD2 configuration
-│   └── prometheus.yml           # Prometheus config (optional)
-├── docker/
-│   ├── Dockerfile               # Multi-stage build for ARM64
-│   └── docker-compose.yml       # Container orchestration
+│   └── obd2_config.json         # OBD2 configuration
+├── docker-compose.yml           # Container orchestration
+├── Dockerfile                   # Multi-stage build for ARM64
 ├── models/
 │   ├── cnn_model.keras          # Trained Keras model
 │   └── cnn_model_int8.tflite    # Quantized TFLite model
@@ -51,7 +50,8 @@ car_ml/
 │ • Normalization  │
 │ • TFLite CNN     │
 │ • Anomaly score  │
-│ • Prometheus /metrics │
+│ • SQLite storage │
+│ • Flask WebSocket│
 │ • Voltage check  │
 └─────────────────┘
          ▲
@@ -127,16 +127,16 @@ Creates `models/cnn_model_int8.tflite` (optimized for RPi).
 python src/obd2_collector.py
 ```
 
-Access metrics at `http://localhost:8000/metrics`.
+Access dashboard at `http://localhost:5000`.
 
 ### 6. Build and Deploy
 
 ```bash
 # Build ARM64 image
-docker buildx build --platform linux/arm64 -f docker/Dockerfile -t obd2-collector:latest .
+docker buildx build --platform linux/arm64 -f Dockerfile -t car-ml:latest .
 
 # Deploy on Raspberry Pi
-docker save obd2-collector:latest | ssh pi@<pi-ip> 'docker load'
+docker save car-ml:latest | ssh pi@<pi-ip> 'docker load'
 ssh pi@<pi-ip> 'cd /app && docker-compose up -d'
 ```
 
@@ -154,30 +154,31 @@ ssh pi@<pi-ip> 'cd /app && docker-compose up -d'
 
 ## Performance
 
-- **Image Size**: ≤180MB
-- **Runtime Memory**: ≤200MB peak
+- **Image Size**: ≤256MB
+- **Runtime Memory**: ≤256MB peak
 - **Collection Rate**: 2Hz (500ms intervals)
 - **Inference Time**: <50ms per sequence
 - **Startup Time**: <10 seconds
 
-## Metrics
+## Dashboard
 
-- `obd2_engine_temperature` - Engine coolant temp (°C)
-- `obd2_engine_rpm` - Engine RPM
-- `obd2_vehicle_speed` - Speed (km/h)
-- `obd2_fuel_level` - Fuel level (%)
-- `obd2_mass_air_flow` - MAF (g/s)
-- `obd2_intake_air_temp` - Intake temp (°C)
-- `obd2_throttle_position` - Throttle (%)
-- `obd2_calculated_load` - Calculated load (%)
-- `obd2_short_fuel_trim` - Short term fuel trim (%)
-- `obd2_long_fuel_trim` - Long term fuel trim (%)
-- `obd2_timing_advance` - Timing advance (°)
-- `obd2_intake_manifold_pressure` - Intake pressure (kPa)
-- `obd2_battery_voltage` - Battery voltage (V)
-- `obd2_anomaly_score` - Anomaly score (0-1)
-- `obd2_data_points_total` - Data points collected
-- `obd2_errors_total` - Communication errors
+The Flask application provides a real-time dashboard with:
+
+- **Live Metrics**: Current values for all OBD2 parameters
+- **Anomaly Detection**: Real-time anomaly scoring with visual alerts
+- **Historical Charts**: Engine RPM and anomaly score trends (last 100 points)
+- **WebSocket Updates**: Live data streaming without page refresh
+
+Access at `http://your-pi:5000`
+
+## Data Storage
+
+All OBD2 data is stored in SQLite (`/data/obd2_data.db`) with:
+
+- Timestamped entries for full historical tracking
+- All 12 OBD2 PIDs plus anomaly scores
+- Battery voltage monitoring
+- REST API access at `/history` for external queries
 
 ## Development
 
@@ -198,10 +199,10 @@ python src/obd2_collector.py
 
 ```bash
 # Build for local testing (amd64)
-docker build -t obd2-collector-dev -f docker/Dockerfile .
+docker build -t car-ml-dev -f Dockerfile .
 
 # Run with mock data
-docker run --rm -p 8000:8000 obd2-collector-dev
+docker run --rm -p 5000:5000 car-ml-dev
 ```
 
 ## Troubleshooting
@@ -210,6 +211,7 @@ docker run --rm -p 8000:8000 obd2-collector-dev
 - **Memory issues**: Monitor with `docker stats` or `htop`
 - **Model not loading**: Ensure `models/cnn_model_int8.tflite` exists
 - **ADC not working**: Check I2C with `i2cdetect -y 1`
+- **Dashboard not loading**: Check port 5000 is accessible
 
 ## Contributing
 

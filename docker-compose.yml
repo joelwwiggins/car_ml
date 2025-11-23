@@ -1,15 +1,17 @@
 services:
-  obd2-collector:
+  car-ml:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: obd2_collector
+    container_name: car_ml
     privileged: true
     devices:
       - /dev/ttyUSB0:/dev/ttyUSB0
       - /dev/i2c-1:/dev/i2c-1
     ports:
-      - "8000:8000" # Prometheus metrics
+      - "5000:5000" # Flask dashboard
+    volumes:
+      - /data:/data
     networks:
       - obd2_network
     restart: always
@@ -18,111 +20,11 @@ services:
     deploy:
       resources:
         limits:
+          memory: 256M
+          cpus: "0.5"
+        reservations:
           memory: 128M
           cpus: "0.3"
-        reservations:
-          memory: 64M
-          cpus: "0.2"
-
-  voltage-monitor:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: voltage_monitor
-    user: root
-    privileged: true
-    command: ["python3", "src/voltage_monitor.py"]
-    devices:
-      - /dev/i2c-1:/dev/i2c-1
-    restart: always
-    deploy:
-      resources:
-        limits:
-          memory: 32M
-          cpus: "0.1"
-
-  victoriametrics:
-    image: victoriametrics/victoria-metrics:latest
-    container_name: victoriametrics
-    command:
-      - -storageDataPath=/storage
-    volumes:
-      - /data/victoria:/storage
-    ports:
-      - "8428:8428"
-    networks:
-      - obd2_network
-    restart: unless-stopped
-    deploy:
-      resources:
-        limits:
-          memory: 64M
-          cpus: "0.2"
-        reservations:
-          memory: 32M
-          cpus: "0.1"
-
-  grafana:
-    image: grafana/grafana:latest
-    container_name: grafana
-    volumes:
-      - /data/grafana:/var/lib/grafana
-      - ./docker/grafana/provisioning:/etc/grafana/provisioning
-    ports:
-      - "3000:3000"
-    environment:
-      - GF_SECURITY_ADMIN_PASSWORD=admin
-    networks:
-      - obd2_network
-    restart: unless-stopped
-    depends_on:
-      - victoriametrics
-    deploy:
-      resources:
-        limits:
-          memory: 64M
-          cpus: "0.2"
-        reservations:
-          memory: 32M
-          cpus: "0.1"
-
-  node-exporter:
-    image: prom/node-exporter:latest
-    container_name: node_exporter
-    command:
-      - --collector.disable-defaults
-      - --collector.cpu
-      - --collector.meminfo
-      - --collector.loadavg
-      - --collector.filesystem
-    volumes:
-      - /proc:/host/proc:ro
-      - /sys:/host/sys:ro
-      - /:/rootfs:ro
-    ports:
-      - "9100:9100"
-    networks:
-      - obd2_network
-    restart: always
-    deploy:
-      resources:
-        limits:
-          memory: 20M
-          cpus: "0.1"
-        reservations:
-          memory: 10M
-          cpus: "0.05"
-
-  init-data:
-    image: curlimages/curl:latest
-    container_name: init_data
-    volumes:
-      - ./docker/init-data.sh:/init-data.sh
-    command: ["/bin/sh", "/init-data.sh"]
-    depends_on:
-      - victoriametrics
-    networks:
-      - obd2_network
 
 networks:
   obd2_network:

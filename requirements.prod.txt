@@ -1,9 +1,19 @@
 numpy==1.26.4
-prometheus_client==0.23.1
 python-can==4.6.1
 pyserial==3.5
 requests==2.32.5
+scikit-learn==1.7.2
+tensorflow==2.16.1
+matplotlib==3.8.4
+
+# Minimal Adafruit for voltage monitoring
 Adafruit-Blinka==8.67.0
 adafruit-circuitpython-ads1x15==3.0.2
 adafruit-circuitpython-busdevice==5.2.14
 Adafruit-PlatformDetect==3.84.1
+
+# Flask and WebSockets for dashboard
+flask==3.0.3
+flask-socketio==5.3.6
+python-socketio==5.11.2
+eventlet==0.36.1

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Lean OBD2 Collector with CNN Anomaly Detection for Raspberry Pi Zero 2W
-Integrated voltage monitoring and Prometheus metrics export
+Integrated voltage monitoring, SQLite storage, and Flask WebSocket dashboard
 """
 
 import time
@@ -11,6 +11,7 @@ import signal
 from collections import deque
 import threading
 import json
+import sqlite3
 import subprocess
 
 # CAN and OBD2
@@ -27,11 +28,11 @@ except ImportError:
     except ImportError:
         tflite = None
 
-# Prometheus
-from prometheus_client import start_http_server, Gauge, Counter
-
-# Dashboard
-from dashboard import update_dashboard_metrics, update_dashboard_data_point
+# Flask and WebSockets
+from flask import Flask, render_template_string, jsonify
+from flask_socketio import SocketIO, emit
+import eventlet
+eventlet.monkey_patch()
 
 # Voltage monitoring
 ADC_AVAILABLE = False
@@ -47,33 +48,21 @@ except ImportError:
 # Configuration
 CAN_INTERFACE = 'can0'
 CAN_BITRATE = 500000
-PROMETHEUS_PORT = 8000
+FLASK_PORT = 5000
 SEQUENCE_LENGTH = 32
 FEATURE_DIM = 12  # 12 PIDs
 BUFFER_SIZE = 100
 COLLECTION_INTERVAL = 0.5  # 2 Hz
 VOLTAGE_THRESHOLD = 11.0
 VOLTAGE_GRACE_PERIOD = 60  # seconds
+DB_PATH = '/data/obd2_data.db'
 
-# Prometheus metrics
-obd2_metrics = {
-    'engine_temp': Gauge('obd2_engine_temperature', 'Engine coolant temp (°C)'),
-    'engine_rpm': Gauge('obd2_engine_rpm', 'Engine RPM'),
-    'vehicle_speed': Gauge('obd2_vehicle_speed', 'Speed (km/h)'),
-    'fuel_level': Gauge('obd2_fuel_level', 'Fuel level (%)'),
-    'mass_air_flow': Gauge('obd2_mass_air_flow', 'MAF (g/s)'),
-    'intake_temp': Gauge('obd2_intake_air_temp', 'Intake temp (°C)'),
-    'throttle_pos': Gauge('obd2_throttle_position', 'Throttle (%)'),
-    'calc_load': Gauge('obd2_calculated_load', 'Calculated load (%)'),
-    'short_fuel_trim': Gauge('obd2_short_fuel_trim', 'Short term fuel trim (%)'),
-    'long_fuel_trim': Gauge('obd2_long_fuel_trim', 'Long term fuel trim (%)'),
-    'timing_advance': Gauge('obd2_timing_advance', 'Timing advance (°)'),
-    'intake_pressure': Gauge('obd2_intake_manifold_pressure', 'Intake pressure (kPa)'),
-    'battery_voltage': Gauge('obd2_battery_voltage', 'Battery voltage (V)'),
-    'anomaly_score': Gauge('obd2_anomaly_score', 'Anomaly score (0-1)'),
-}
-obd2_data_points = Counter('obd2_data_points_total', 'Data points collected')
-obd2_errors = Counter('obd2_errors_total', 'Communication errors')
+# Flask app
+app = Flask(__name__)
+socketio = SocketIO(app, cors_allowed_origins="*")
+
+# Global db_conn
+db_conn = None
 
 class SimpleScaler:
     def __init__(self):
@@ -102,21 +91,22 @@ class OBD2Collector:
         self.is_trained = False
         self.shutdown_event = threading.Event()
         self.low_voltage_start = None
+        self.db_conn = None
 
         # OBD2 PIDs (12 total)
         self.pids = {
-            0x04: ('calc_load', obd2_metrics['calc_load']),
-            0x05: ('engine_temp', obd2_metrics['engine_temp']),
-            0x06: ('short_fuel_trim', obd2_metrics['short_fuel_trim']),
-            0x07: ('long_fuel_trim', obd2_metrics['long_fuel_trim']),
-            0x0B: ('intake_pressure', obd2_metrics['intake_pressure']),
-            0x0C: ('engine_rpm', obd2_metrics['engine_rpm']),
-            0x0D: ('vehicle_speed', obd2_metrics['vehicle_speed']),
-            0x0E: ('timing_advance', obd2_metrics['timing_advance']),
-            0x0F: ('intake_temp', obd2_metrics['intake_temp']),
-            0x10: ('mass_air_flow', obd2_metrics['mass_air_flow']),
-            0x11: ('throttle_pos', obd2_metrics['throttle_pos']),
-            0x2F: ('fuel_level', obd2_metrics['fuel_level']),
+            0x04: 'calc_load',
+            0x05: 'engine_temp',
+            0x06: 'short_fuel_trim',
+            0x07: 'long_fuel_trim',
+            0x0B: 'intake_pressure',
+            0x0C: 'engine_rpm',
+            0x0D: 'vehicle_speed',
+            0x0E: 'timing_advance',
+            0x0F: 'intake_temp',
+            0x10: 'mass_air_flow',
+            0x11: 'throttle_pos',
+            0x2F: 'fuel_level',
         }
 
         # Setup ADC for voltage
@@ -130,6 +120,33 @@ class OBD2Collector:
                 self.adc_chan = None
 
         self.load_model()
+        self.setup_database()
+
+    def setup_database(self):
+        """Setup SQLite database."""
+        global db_conn
+        os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+        db_conn = self.db_conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+        self.db_conn.execute('''
+            CREATE TABLE IF NOT EXISTS obd2_data (
+                timestamp REAL PRIMARY KEY,
+                engine_temp REAL,
+                engine_rpm REAL,
+                vehicle_speed REAL,
+                fuel_level REAL,
+                mass_air_flow REAL,
+                intake_temp REAL,
+                throttle_pos REAL,
+                calc_load REAL,
+                short_fuel_trim REAL,
+                long_fuel_trim REAL,
+                timing_advance REAL,
+                intake_pressure REAL,
+                battery_voltage REAL,
+                anomaly_score REAL
+            )
+        ''')
+        self.db_conn.commit()
 
     def load_model(self):
         """Load INT8 quantized TFLite model."""
@@ -170,7 +187,7 @@ class OBD2Collector:
                 if response and response.arbitration_id == 0x7E8:
                     return response.data
             except:
-                obd2_errors.inc()
+                pass
         elif self.serial_conn:
             try:
                 self.serial_conn.write(f"01{pid:02X}\r".encode())
@@ -182,8 +199,7 @@ class OBD2Collector:
                         data = bytes([0x41, pid] + [int(x, 16) for x in parts[2:]])
                         return data
             except:
-                obd2_errors.inc()
-                obd2_errors.inc()
+                pass
         return None
 
     def parse_obd2_response(self, pid, data):
@@ -217,20 +233,48 @@ class OBD2Collector:
     def collect_data_point(self):
         """Collect data from all PIDs."""
         data_point = {}
-        for pid, (name, metric) in self.pids.items():
+        for pid, name in self.pids.items():
             response = self.send_obd2_request(pid)
             if response:
                 value = self.parse_obd2_response(pid, response)
                 if value is not None:
                     data_point[name] = value
-                    metric.set(value)
 
         # Add battery voltage
         voltage = self.read_voltage()
         data_point['battery_voltage'] = voltage
-        obd2_metrics['battery_voltage'].set(voltage)
 
         return data_point
+
+    def store_data_point(self, data_point):
+        """Store data point in SQLite database."""
+        if self.db_conn:
+            timestamp = time.time()
+            self.db_conn.execute('''
+                INSERT OR REPLACE INTO obd2_data (
+                    timestamp, engine_temp, engine_rpm, vehicle_speed, fuel_level,
+                    mass_air_flow, intake_temp, throttle_pos, calc_load,
+                    short_fuel_trim, long_fuel_trim, timing_advance,
+                    intake_pressure, battery_voltage, anomaly_score
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                timestamp,
+                data_point.get('engine_temp'),
+                data_point.get('engine_rpm'),
+                data_point.get('vehicle_speed'),
+                data_point.get('fuel_level'),
+                data_point.get('mass_air_flow'),
+                data_point.get('intake_temp'),
+                data_point.get('throttle_pos'),
+                data_point.get('calc_load'),
+                data_point.get('short_fuel_trim'),
+                data_point.get('long_fuel_trim'),
+                data_point.get('timing_advance'),
+                data_point.get('intake_pressure'),
+                data_point.get('battery_voltage'),
+                data_point.get('anomaly_score', 0)
+            ))
+            self.db_conn.commit()
 
     def read_voltage(self):
         """Read battery voltage from ADC."""
@@ -298,9 +342,11 @@ class OBD2Collector:
         if not self.setup_interfaces():
             return
 
-        # Start Prometheus server
-        start_http_server(PROMETHEUS_PORT)
-        print(f"Prometheus metrics on port {PROMETHEUS_PORT}")
+        # Start Flask server in background thread
+        flask_thread = threading.Thread(target=lambda: socketio.run(app, host='0.0.0.0', port=FLASK_PORT))
+        flask_thread.daemon = True
+        flask_thread.start()
+        print(f"Flask dashboard on port {FLASK_PORT}")
 
         # Train scaler on initial data
         print("Collecting initial data for normalization...")
@@ -308,7 +354,7 @@ class OBD2Collector:
         for _ in range(SEQUENCE_LENGTH):
             data = self.collect_data_point()
             if data:
-                features = [data.get(name, 0) for name, _ in self.pids.items()]
+                features = [data.get(name, 0) for name in self.pids.values()]
                 initial_samples.append(features)
                 time.sleep(COLLECTION_INTERVAL)
         if initial_samples:
@@ -322,13 +368,21 @@ class OBD2Collector:
 
             data_point = self.collect_data_point()
             if data_point:
-                obd2_data_points.inc()
-                features = [data_point.get(name, 0) for name, _ in self.pids.items()]
+                # Store in database
+                self.store_data_point(data_point)
+
+                features = [data_point.get(name, 0) for name in self.pids.values()]
                 self.data_buffer.append(features)
 
                 # Compute anomaly score
                 score = self.compute_anomaly_score()
-                obd2_metrics['anomaly_score'].set(score)
+                data_point['anomaly_score'] = score
+
+                # Store updated data point with anomaly score
+                self.store_data_point(data_point)
+
+                # Emit to WebSocket clients
+                socketio.emit('obd2_data', data_point)
 
                 # Check voltage
                 self.check_voltage_shutdown(data_point['battery_voltage'])
@@ -344,6 +398,142 @@ class OBD2Collector:
             self.bus.shutdown()
         if self.serial_conn:
             self.serial_conn.close()
+        if self.db_conn:
+            self.db_conn.close()
+
+# Flask routes
+@app.route('/')
+def dashboard():
+    return render_template_string(DASHBOARD_HTML)
+
+@app.route('/history')
+def history():
+    global db_conn
+    if db_conn:
+        rows = db_conn.execute('''
+            SELECT * FROM obd2_data ORDER BY timestamp DESC LIMIT 100
+        ''').fetchall()
+        # Convert to dict
+        data = []
+        for row in rows:
+            data.append({
+                'timestamp': row[0],
+                'engine_temp': row[1],
+                'engine_rpm': row[2],
+                'vehicle_speed': row[3],
+                'fuel_level': row[4],
+                'mass_air_flow': row[5],
+                'intake_temp': row[6],
+                'throttle_pos': row[7],
+                'calc_load': row[8],
+                'short_fuel_trim': row[9],
+                'long_fuel_trim': row[10],
+                'timing_advance': row[11],
+                'intake_pressure': row[12],
+                'battery_voltage': row[13],
+                'anomaly_score': row[14]
+            })
+        return jsonify({'data': data})
+    return jsonify({'data': []})
+
+DASHBOARD_HTML = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>OBD2 Dashboard</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .metric { display: inline-block; margin: 10px; padding: 10px; border: 1px solid #ccc; border-radius: 5px; }
+        .value { font-size: 24px; font-weight: bold; }
+        .label { font-size: 12px; color: #666; }
+        .anomaly { color: red; }
+        .chart-container { width: 800px; height: 400px; margin: 20px 0; }
+    </style>
+</head>
+<body>
+    <h1>OBD2 Real-time Dashboard</h1>
+    <div id="metrics"></div>
+    <h2>Historical Data (Last 100 points)</h2>
+    <div class="chart-container">
+        <canvas id="historyChart"></canvas>
+    </div>
+    <script>
+        const socket = io();
+        const metricsDiv = document.getElementById('metrics');
+        let historyData = [];
+
+        // Fetch historical data
+        fetch('/history').then(r => r.json()).then(data => {
+            historyData = data.data.reverse(); // oldest first
+            updateChart();
+        });
+
+        socket.on('obd2_data', function(data) {
+            metricsDiv.innerHTML = '';
+            Object.keys(data).forEach(key => {
+                const div = document.createElement('div');
+                div.className = 'metric';
+                div.innerHTML = `
+                    <div class="label">${key.replace(/_/g, ' ').toUpperCase()}</div>
+                    <div class="value ${key === 'anomaly_score' && data[key] > 0.5 ? 'anomaly' : ''}">${data[key] ? data[key].toFixed(2) : 'N/A'}</div>
+                `;
+                metricsDiv.appendChild(div);
+            });
+
+            // Add to history and update chart
+            historyData.push(data);
+            if (historyData.length > 100) historyData.shift();
+            updateChart();
+        });
+
+        function updateChart() {
+            const ctx = document.getElementById('historyChart').getContext('2d');
+            const labels = historyData.map(d => new Date(d.timestamp * 1000).toLocaleTimeString());
+            const rpmData = historyData.map(d => d.engine_rpm || 0);
+            const anomalyData = historyData.map(d => d.anomaly_score || 0);
+
+            new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Engine RPM',
+                        data: rpmData,
+                        borderColor: 'blue',
+                        fill: false
+                    }, {
+                        label: 'Anomaly Score',
+                        data: anomalyData,
+                        borderColor: 'red',
+                        fill: false,
+                        yAxisID: 'y1'
+                    }]
+                },
+                options: {
+                    scales: {
+                        y: {
+                            type: 'linear',
+                            display: true,
+                            position: 'left',
+                        },
+                        y1: {
+                            type: 'linear',
+                            display: true,
+                            position: 'right',
+                            grid: {
+                                drawOnChartArea: false,
+                            },
+                        }
+                    }
+                }
+            });
+        }
+    </script>
+</body>
+</html>
+"""
 
 def signal_handler(signum, frame):
     collector.shutdown_event.set()

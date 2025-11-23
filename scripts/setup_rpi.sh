@@ -60,19 +60,18 @@ sudo usermod -aG docker $USER
 
 # Create application directories
 echo "Creating application directories..."
-mkdir -p ~/obd2_monitor/logs
-mkdir -p ~/obd2_monitor/config
-mkdir -p ~/obd2_monitor/prometheus_data
+mkdir -p ~/car_ml/logs
+mkdir -p ~/car_ml/data
 
 # Clone or copy application code
 echo "Setting up application code..."
 # Assuming code is already there, or you can clone from repo
-cd ~/obd2_monitor
+cd ~/car_ml
 
 # Setup log rotation
 echo "Setting up log rotation..."
-sudo sh -c 'cat > /etc/logrotate.d/obd2_monitor << EOF
-/app/logs/*.log {
+sudo sh -c 'cat > /etc/logrotate.d/car_ml << EOF
+/home/pi/car_ml/logs/*.log {
     daily
     missingok
     rotate 7
@@ -84,16 +83,16 @@ EOF'
 
 # Setup systemd service for auto-start
 echo "Setting up systemd service..."
-sudo sh -c 'cat > /etc/systemd/system/obd2-monitor.service << EOF
+sudo sh -c 'cat > /etc/systemd/system/car-ml.service << EOF
 [Unit]
-Description=OBD2 Vehicle Monitor
+Description=Car ML OBD2 Monitor
 After=docker.service
 Requires=docker.service
 
 [Service]
 Type=simple
 User=root
-WorkingDirectory=/home/pi/obd2_monitor
+WorkingDirectory=/home/pi/car_ml
 ExecStart=/usr/bin/docker compose up
 ExecStop=/usr/bin/docker compose down
 Restart=always
@@ -104,7 +103,7 @@ WantedBy=multi-user.target
 EOF'
 
 sudo systemctl daemon-reload
-sudo systemctl enable obd2-monitor.service
+sudo systemctl enable car-ml.service
 
 # Setup ADC for voltage monitoring (ADS1015 via I2C)
 # Note: On Bookworm, use a venv or --break-system-packages if installing globally
@@ -118,7 +117,6 @@ sudo raspi-config nonint do_i2c 0
 # Setup firewall (optional)
 echo "Setting up firewall..."
 sudo apt-get install -y ufw
-sudo ufw allow 9090/tcp  # Prometheus
 sudo ufw allow 5000/tcp  # Dashboard
 sudo ufw --force enable
 
@@ -128,10 +126,10 @@ echo "Next steps:"
 echo "1. Reboot the RPi: sudo reboot"
 echo "2. After reboot, check CAN interface: ip link show can0"
 echo "3. Bring up CAN interface: sudo ip link set can0 up"
-echo "4. Start the monitoring system: sudo systemctl start obd2-monitor"
+echo "4. Start the monitoring system: sudo systemctl start car-ml"
 echo "5. Access dashboard at: http://<rpi-ip>:5000"
 echo ""
 echo "For troubleshooting:"
 echo "- Check logs: docker-compose logs"
 echo "- CAN interface: dmesg | grep can"
-echo "- System logs: journalctl -u obd2-monitor"
+echo "- System logs: journalctl -u car-ml"

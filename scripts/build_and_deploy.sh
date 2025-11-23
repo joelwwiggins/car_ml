@@ -9,12 +9,12 @@ echo "🚗 Building OBD2 Monitor for Raspberry Pi Zero 2W..."
 # Enable Docker buildx for cross-compilation
 docker buildx create --use --name cross-builder 2>/dev/null || docker buildx use cross-builder
 
-# Build data collector container (ARM64)
-echo "Building data collector container..."
+# Build car-ml container (ARM64)
+echo "Building car-ml container..."
 docker buildx build \
     --platform linux/arm64 \
-    --file docker/Dockerfile \
-    --tag obd2-collector:arm64 \
+    --file Dockerfile \
+    --tag car-ml:arm64 \
     --load \
     .
 
@@ -22,34 +22,31 @@ docker buildx build \
 # echo "Building monitoring container..."
 # docker buildx build \
 #     --platform linux/arm64 \
-#     --file Dockerfile.monitor \
-#     --tag obd2-monitor:arm64 \
+#     --file Dockerfile \
+#     --tag car-ml:arm64 \
 #     --load \
 #     .
 
-echo "✅ Containers built successfully!"
+echo "✅ Container built successfully!"
 echo ""
 echo "📦 Deployment Options:"
 echo ""
-echo "Option 1 - Save to tar files for transfer:"
-echo "docker save obd2-collector:arm64 > obd2-collector-arm64.tar"
-# echo "docker save obd2-monitor:arm64 > obd2-monitor-arm64.tar"
-echo "scp *.tar pi@<rpi-ip>:/home/pi/"
+echo "Option 1 - Save to tar file for transfer:"
+echo "docker save car-ml:arm64 > car-ml-arm64.tar"
+echo "scp car-ml-arm64.tar pi@<rpi-ip>:/home/pi/"
+echo "ssh pi@<rpi-ip> 'docker load < car-ml-arm64.tar'"
 echo ""
 echo "Option 2 - Push to registry (requires registry access):"
-echo "# docker tag obd2-collector:arm64 your-registry/obd2-collector:arm64"
-echo "# docker tag obd2-monitor:arm64 your-registry/obd2-monitor:arm64"
-echo "# docker push your-registry/obd2-collector:arm64"
-echo "# docker push your-registry/obd2-monitor:arm64"
+echo "docker tag car-ml:arm64 your-registry/car-ml:arm64"
+echo "docker push your-registry/car-ml:arm64"
 echo ""
 echo "Option 3 - Direct deploy (if RPi accessible via SSH):"
-echo "# scp -r . pi@<rpi-ip>:/home/pi/obd2_monitor"
-echo "# ssh pi@<rpi-ip> 'cd /home/pi/obd2_monitor && ./setup_rpi.sh'"
+echo "scp -r . pi@<rpi-ip>:/home/pi/car_ml"
+echo "ssh pi@<rpi-ip> 'cd /home/pi/car_ml && docker-compose up -d'"
 echo ""
 echo "🎯 Memory Usage (optimized for 512MB RPi Zero 2W):"
-echo "- Data Collector: ~100-200MB"
-echo "- Monitor/Dashboard: ~75-150MB"
-echo "- Total: <350MB with overhead"
+echo "- OBD2 Collector + Dashboard: ~200-256MB"
+echo "- Total: <300MB with overhead"
 echo ""
 echo "🔧 Hardware Requirements:"
 echo "- Raspberry Pi Zero 2W"
@@ -59,5 +56,4 @@ echo "- OBD2 cable"
 echo ""
 echo "📊 Access Points:"
 echo "- Web Dashboard: http://<rpi-ip>:5000"
-echo "- Prometheus: http://<rpi-ip>:9090"
-echo "- Metrics API: http://<rpi-ip>:8000"
+echo "- Historical Data API: http://<rpi-ip>:5000/history"

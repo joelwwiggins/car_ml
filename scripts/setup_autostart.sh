@@ -2,9 +2,10 @@
 
 # Determine the directory where this script is located
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
-# The docker directory is a sibling of scripts/ or inside the project root
+# The project root is the parent of scripts/
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
-DOCKER_DIR="$PROJECT_ROOT/docker"
+
+SERVICE_NAME="car-ml"
 
 SERVICE_NAME="car-ml"
 
@@ -22,7 +23,7 @@ else
 fi
 
 echo "Configuring service for User: $REAL_USER"
-echo "Docker Directory: $DOCKER_DIR"
+echo "Project Directory: $PROJECT_ROOT"
 
 # Create systemd service file
 cat > /etc/systemd/system/$SERVICE_NAME.service <<EOF
@@ -35,7 +36,7 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-WorkingDirectory=$DOCKER_DIR
+WorkingDirectory=$PROJECT_ROOT
 User=$REAL_USER
 Environment="PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 # Try 'docker compose' (v2) first

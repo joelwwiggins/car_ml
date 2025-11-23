@@ -22,13 +22,11 @@ COPY src/ .
 COPY config/obd2_config.json config/
 COPY models/cnn_model_int8.tflite models/
 
-# Create non-root user
-RUN groupadd -r app && useradd -r -g app app && \
-    chown -R app:app /app
-USER app
+# Create data directory
+RUN mkdir -p /data
 
-# Expose Prometheus port
-EXPOSE 8000
+# Expose Flask port
+EXPOSE 5000
 
 # Run collector
 CMD ["python3", "obd2_collector.py"]
