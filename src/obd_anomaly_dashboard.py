@@ -1,3 +1,4 @@
+
 import threading
 import time
 import queue
@@ -12,14 +13,11 @@ from flask_socketio import SocketIO, emit
 import plotly.graph_objs as go
 import plotly.utils
 import json
-import eventlet  # For async SocketIO
 try:
     import systemd.daemon
     SYSTEMD_AVAILABLE = True
 except ImportError:
     SYSTEMD_AVAILABLE = False
-
-eventlet.monkey_patch()
 
 # Configuration
 CAN_INTERFACE = 'can0'  # PiCAN3 interface
@@ -100,7 +98,7 @@ def request_pid(arbitration_id, pid):
 # Data Collection Thread
 def collect_data():
     global bus
-    bus = can.interface.Bus(channel=CAN_INTERFACE, bustype='socketcan')
+    bus = can.interface.Bus(channel=CAN_INTERFACE, interface='socketcan')
     bus.set_filters([{"can_id": 0x7E8, "can_mask": 0x7FF, "extended": False}])  # Filter OBD responses
     
     pids = {'rpm': 0x0C, 'speed': 0x0D, 'coolant': 0x05, 'throttle': 0x11}
