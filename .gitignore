@@ -133,13 +133,18 @@ dmypy.json
 !.vscode/settings.json
 
 # Docker
-Dockerfile
+# Dockerfile - keep for docker-compose builds
 
 # Application runtime files
 logs/
 *.log
 checkpoint.json
 prometheus_data/
+
+# SQLite databases
+*.db
+*.db-journal
+obd_data.db
 
 # CSV log files
 *.csv
