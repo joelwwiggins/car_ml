@@ -1,0 +1,18 @@
+[Unit]
+Description=OBD Anomaly Dashboard Service
+After=network.target
+
+[Service]
+Type=simple
+User=joel
+WorkingDirectory=/home/joel/scripts/car_ml
+# Configure CAN interface as per PiCAN FD Zero manual
+ExecStartPre=-/sbin/ip link set can0 up type can bitrate 500000 dbitrate 2000000 fd on sample-point .8 dsample-point .8
+# Run the dashboard application
+ExecStart=/usr/bin/python3 /home/joel/scripts/car_ml/src/obd_anomaly_dashboard.py
+Restart=always
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
